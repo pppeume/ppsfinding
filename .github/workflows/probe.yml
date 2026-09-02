@@ -1,0 +1,43 @@
+name: API 엔드포인트 진단
+
+# config/sources.yaml 의 오퍼레이션 후보 중 어떤 조합이 실제로 응답하는지 확인한다.
+# 최초 세팅 시, 그리고 조달청이 API 버전을 올려 수집이 깨졌을 때 실행한다.
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "진단에 쓸 조회 기간(일)"
+        required: false
+        default: "1"
+      dump:
+        description: "정상 응답의 필드 키 목록까지 출력"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 의존성 설치
+        run: pip install -r requirements.txt
+
+      - name: 엔드포인트 후보 진단
+        env:
+          G2B_SERVICE_KEY: ${{ secrets.G2B_SERVICE_KEY }}
+          PYTHONPATH: src
+        run: |
+          python -m g2b_watch.cli probe \
+            --days "${{ inputs.days || '1' }}" \
+            ${{ inputs.dump == true && '--dump' || '' }}

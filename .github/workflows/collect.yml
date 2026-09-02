@@ -1,0 +1,68 @@
+name: 입찰공고 수집
+
+on:
+  schedule:
+    # 평일 08:00 KST = 전날 23:00 UTC (KST = UTC+9)
+    # 일~목 23:00 UTC → 월~금 08:00 KST
+    - cron: "0 23 * * 0-4"
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "조회 기간(일)"
+        required: false
+        default: "2"
+      mode:
+        description: "keyword(검색어별 호출) 또는 full(기간 전체 스캔)"
+        required: false
+        default: "keyword"
+        type: choice
+        options: [keyword, full]
+      dry_run:
+        description: "Notion 에 쓰지 않고 결과만 확인"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: g2b-collect
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 의존성 설치
+        run: pip install -r requirements.txt
+
+      - name: 수집 및 Notion 적재
+        env:
+          G2B_SERVICE_KEY: ${{ secrets.G2B_SERVICE_KEY }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          PYTHONPATH: src
+        run: |
+          python -m g2b_watch.cli collect \
+            --days "${{ inputs.days || '2' }}" \
+            --mode "${{ inputs.mode || 'keyword' }}" \
+            --json-out out/result.json \
+            ${{ inputs.dry_run == true && '--dry-run' || '' }}
+
+      - name: 수집 결과 아티팩트 업로드
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: collect-result
+          path: out/
+          if-no-files-found: ignore
+          retention-days: 14
