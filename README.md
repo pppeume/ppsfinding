@@ -34,7 +34,7 @@ GitHub Actions (cron: 평일 08:00 KST)
 | 항목 | 값 |
 |---|---|
 | 서비스 ID | `BidPublicInfoService` (버전 3.1) |
-| 엔드포인트 | `https://apis.data.go.kr/1230000/ad/BidPublicInfoService` |
+| 엔드포인트 | `http://apis.data.go.kr/1230000/ad/BidPublicInfoService` (**https 아님**) |
 | 인증 파라미터 | `ServiceKey` (**대문자 S**) |
 | 물품 | `getBidPblancListInfoThngPPSSrch` |
 | 용역 | `getBidPblancListInfoServcPPSSrch` |
@@ -42,6 +42,7 @@ GitHub Actions (cron: 평일 08:00 KST)
 | 기간 | `inqryBgnDt` / `inqryEndDt`, `YYYYMMDDHHMM` |
 | 키워드 | `bidNtceNm` (공고명 **부분일치**) |
 | 처리 한도 | 30 tps |
+| 전송 암호화 | 명세서 표기 **SSL 없음** — 443 포트는 연결 타임아웃 |
 
 문서상 업무구분별로 두 계열이 있다.
 
@@ -273,6 +274,7 @@ python -m g2b_watch.cli collect --days 2
 | 증상 | 원인 / 조치 |
 |---|---|
 | `SERVICE_KEY_IS_NOT_REGISTERED_ERROR` | 활용신청이 아직 승인되지 않았거나 키를 잘못 복사함. 포털 마이페이지에서 승인 상태 확인 |
+| `ConnectTimeoutError ... port=443` | 이 서비스는 SSL 을 제공하지 않는다. `config/sources.yaml` 의 `base` 가 `http://` 인지 확인. `probe` 가 80/443 포트 열림 여부를 먼저 출력한다 |
 | `사용 가능한 오퍼레이션을 찾지 못했습니다` | `probe --dump` 실행 후 `config/sources.yaml` 의 variants 수정 |
 | Notion `object_not_found` | 인테그레이션을 대상 DB 에 연결하지 않았음 |
 | Notion `validation_error … is not a property that exists` | DB 속성 이름을 바꿨다. `notion_sink.py` 의 속성명과 맞출 것 |

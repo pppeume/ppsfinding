@@ -5,6 +5,9 @@
 #   - 운영 엔드포인트: apis.data.go.kr/1230000/ad/BidPublicInfoService
 #   - 인증        : ServiceKey (쿼리 파라미터, 대문자 S)
 #   - 응답 포맷   : XML / JSON (type=json)
+#   - 전송 암호화 : 명세서상 "SSL 없음". 운영 엔드포인트가 http 로 표기되어 있고
+#                   443 포트는 연결 타임아웃이 난다. 그래서 base 는 http 다.
+#                   혹시 나중에 https 가 열리면 client 가 자동으로 시도한다(scheme_fallback).
 #   - 처리 한도   : 30 tps, 평균 응답 500ms
 #
 # 오퍼레이션 선택 근거
@@ -15,7 +18,9 @@
 #   키워드 모니터링이 목적이므로 (b) PPSSrch 계열을 사용한다.
 
 api:
-  base: "https://apis.data.go.kr/1230000/ad/BidPublicInfoService"
+  base: "http://apis.data.go.kr/1230000/ad/BidPublicInfoService"
+  # 연결 실패 시 반대 스킴(http<->https)으로 한 번 더 시도한다
+  scheme_fallback: true
   # 문서 표기는 ServiceKey(대문자 S). 소문자로 보내면 서비스에 따라 인증 실패할 수 있다.
   service_key_param: "ServiceKey"
   timeout_sec: 30

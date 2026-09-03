@@ -47,6 +47,7 @@ class Source:
 class ApiSettings:
     base: str
     service_key_param: str
+    scheme_fallback: bool
     timeout_sec: int
     retries: int
     backoff_sec: float
@@ -125,8 +126,9 @@ def load_sources(path: str | os.PathLike[str] | None = None) -> SourcesConfig:
 
     api_raw = doc.get("api", {})
     api = ApiSettings(
-        base=api_raw.get("base", "https://apis.data.go.kr/1230000/ad/BidPublicInfoService").rstrip("/"),
+        base=api_raw.get("base", "http://apis.data.go.kr/1230000/ad/BidPublicInfoService").rstrip("/"),
         service_key_param=api_raw.get("service_key_param", "ServiceKey"),
+        scheme_fallback=bool(api_raw.get("scheme_fallback", True)),
         timeout_sec=int(api_raw.get("timeout_sec", 30)),
         retries=int(api_raw.get("retries", 3)),
         backoff_sec=float(api_raw.get("backoff_sec", 2.0)),

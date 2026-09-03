@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import pytest
+import requests
 
 from g2b_watch.config import DateParams, Source, Variant, load_keywords, load_sources
 from g2b_watch.g2b_client import G2BClient, G2BError, normalize_service_key
@@ -239,3 +240,61 @@ def test_end_to_end_filtering_with_documented_payload():
     assert "someone@example.org" not in json.dumps(leaked, ensure_ascii=False, default=str)
 
     assert set(kept[1].axes) >= {"AI", "통합관제"}
+
+
+# --- 스킴 폴백 (조달청 서비스는 명세상 SSL 미지원) -----------------------------
+
+
+class SchemeSession:
+    """https 는 연결 타임아웃, http 만 응답하는 세션 — 실제 관측된 상황."""
+
+    def __init__(self, dead_scheme="https"):
+        self.dead_scheme = dead_scheme
+        self.calls = []
+
+    def get(self, url, params=None, timeout=None):
+        self.calls.append(url)
+        if url.startswith(f"{self.dead_scheme}://"):
+            raise requests.ConnectionError("connect timeout")
+        return FakeResponse(
+            json.dumps(
+                {
+                    "response": {
+                        "header": {"resultCode": "00"},
+                        "body": {"items": [{"bidNtceNo": "1", "bidNtceOrd": "000",
+                                            "bidNtceNm": "BEMS 구축"}], "totalCount": 1},
+                    }
+                },
+                ensure_ascii=False,
+            )
+        )
+
+
+def test_base_url_is_http_because_service_has_no_ssl():
+    """명세서 '전송 레벨 암호화: 없음' + 운영 URL 이 http 다."""
+    assert SOURCES.api.base.startswith("http://")
+    assert SOURCES.api.scheme_fallback is True
+
+
+def test_https_connect_failure_falls_back_to_http():
+    source = _source("bid_thng")
+    session = SchemeSession(dead_scheme="https")
+    api = replace(FAST_API, base=FAST_API.base.replace("http://", "https://"), retries=2)
+    client = G2BClient("KEY", api, session=session)
+
+    got = list(client.fetch(source, *WINDOW))
+    assert len(got) == 1
+    assert [u.split("://")[0] for u in session.calls][:2] == ["https", "http"]
+
+
+def test_dead_scheme_is_not_retried_within_a_run():
+    """한 번 연결 실패한 스킴은 같은 실행에서 다시 시도하지 않는다."""
+    source = _source("bid_thng")
+    session = SchemeSession(dead_scheme="https")
+    api = replace(FAST_API, base=FAST_API.base.replace("http://", "https://"), retries=2)
+    client = G2BClient("KEY", api, session=session)
+
+    list(client.fetch(source, *WINDOW))
+    list(client.fetch(source, *WINDOW))
+    assert client._dead_schemes == {"https"}
+    assert sum(1 for u in session.calls if u.startswith("https://")) == 1

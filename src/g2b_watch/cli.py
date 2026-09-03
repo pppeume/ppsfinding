@@ -5,7 +5,9 @@ import argparse
 import json
 import logging
 import os
+import socket
 import sys
+from urllib.parse import urlparse
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -38,8 +40,28 @@ def _window(days: int) -> tuple[datetime, datetime]:
 # --- probe -------------------------------------------------------------------
 
 
+def _tcp_check(host: str, port: int, timeout: float = 8.0) -> str:
+    """TCP 연결만 확인한다. 인증·경로 문제와 네트워크 차단을 구분하기 위한 진단."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return "열림"
+    except socket.timeout:
+        return "타임아웃 (방화벽/미개방 가능성)"
+    except OSError as exc:
+        return f"실패 ({exc.__class__.__name__}: {exc})"
+
+
+def _print_connectivity(base: str) -> None:
+    host = urlparse(base).hostname or base
+    print(f"네트워크 진단 — {host}")
+    for port, label in ((80, "http"), (443, "https")):
+        print(f"  {label:<5} :{port}  {_tcp_check(host, port)}")
+    print()
+
+
 def cmd_probe(args: argparse.Namespace) -> int:
     cfg = load_sources(args.sources)
+    _print_connectivity(cfg.api.base)
     client = G2BClient(os.environ.get("G2B_SERVICE_KEY", ""), cfg.api)
     begin, end = _window(args.days)
 
