@@ -110,7 +110,20 @@ class NotionSink:
             "검토상태": {"select": {"name": "신규"}},
             "관련도": {"number": rec.score},
             "매칭키워드": {"multi_select": [{"name": a} for a in rec.axes]},
+            "수주검토점수": {"number": rec.opportunity_score},
         }
+        if rec.verdict:
+            props["참여여부"] = {"select": {"name": rec.verdict}}
+        if rec.restriction_codes:
+            props["제한사유"] = {
+                "multi_select": [{"name": c} for c in rec.restriction_codes]
+            }
+        if rec.restriction_reasons:
+            props["판정근거"] = {"rich_text": _text(" / ".join(rec.restriction_reasons))}
+        if rec.allowed_regions:
+            props["참가가능지역"] = {"rich_text": _text(", ".join(rec.allowed_regions))}
+        if rec.required_licenses:
+            props["요구면허"] = {"rich_text": _text(", ".join(rec.required_licenses))}
         for name, value in (
             ("공고종류", rec.notice_kind),
             ("수요기관", rec.demand_org),

@@ -1,17 +1,22 @@
-# ppsfinding — 나라장터(G2B) 입찰공고 키워드 모니터링
+# ppsfinding — FM Bid Intelligence
 
-조달청 나라장터의 **물품·용역 입찰공고**를
-`IoT / BEMS / FM용역 / 통합관제 / 에너지 / AI` 6개 키워드 축으로 자동 수집해
-**Notion 데이터베이스에 적재**한다. 실행은 GitHub Actions 가 **평일 08:00(KST)에 1회** 담당한다.
+조달청 나라장터의 **물품·용역 입찰공고**를 수집해 **우리 회사가 실제로 수주 검토할 가치가 있는
+공고를 자동 선별**하고 Notion 에 적재한다. 단순 키워드 검색기가 아니라 **참가자격 판정 + 수주검토
+점수**까지 내는 것이 목적이다. 실행은 GitHub Actions 가 **평일 08:00(KST)에 1회** 담당한다.
 
 ```
 GitHub Actions (cron: 평일 08:00 KST)
         │
-        ├─ 1. 수집   config/sources.yaml  → 조달청 OpenAPI (data.go.kr)
-        ├─ 2. 정규화 normalize.py         → 응답 필드명 차이를 흡수한 공통 레코드
-        ├─ 3. 필터   config/keywords.yaml → 동의어 매칭 + 제외어 + 관련도 점수
-        └─ 4. 적재   notion_sink.py       → Notion DB upsert (중복키 = 공고번호)
+        ├─ 1. 수집   config/sources.yaml   → 조달청 OpenAPI (입찰공고 PPSSrch)
+        ├─ 2. 정규화 normalize.py          → 공통 레코드 (개인정보 필드 제외)
+        ├─ 3. 분류   config/keywords.yaml  → 동의어 + 제외어 + 의미조합 → 관련도
+        ├─ 4. 보강   enrich.py             → 참가가능지역 · 면허제한 (보조 오퍼레이션)
+        ├─ 5. 판정   qualification.py      → 🟢참여가능 / 🟡검토필요 / 🔴참여불가 + 사유코드
+        ├─ 6. 점수   scoring.py            → 수주검토 점수 100점
+        └─ 7. 적재   notion_sink.py        → Notion DB upsert (중복키 = 공고번호)
 ```
+
+**참여불가 공고도 버리지 않는다.** 경쟁사 동향·시장 규모·발주 트렌드를 읽는 자료가 되기 때문이다.
 
 별도 서버·DB 없이 GitHub Actions 무료 러너와 Notion 만으로 동작한다.
 
@@ -97,6 +102,14 @@ Secrets 등록: 저장소 → Settings → Secrets and variables → Actions →
 | 매칭키워드 | Multi-select | 걸린 키워드 축 |
 | 관련도 | Number | 가중치 합산 점수. 정렬 기준 |
 | 검토상태 | Select | 신규 → 검토중 → 제안준비 → 참여 / 미참여 |
+| **참여여부** | Select | **참여가능 / 검토필요 / 참여불가** — 판정 엔진 결과 |
+| **수주검토점수** | Number | **Opportunity Score 100점 만점.** 70점 이상이 영업 우선검토 |
+| **제한사유** | Multi-select | R01~R10 코드 |
+| **판정근거** | Text | 각 코드가 붙은 이유 |
+| **참가가능지역** | Text | 참가가능지역정보조회 결과 |
+| **요구면허** | Text | 면허제한정보조회 결과 |
+| **D-Day** | Formula | 입찰마감까지 남은 일수 |
+| **영업의견** | Text | 검토 담당자 메모 |
 | 담당자 | Person | 수동 배정용 |
 | 공고링크 | URL | 원문에 상세 URL 이 있을 때만 채움 |
 | 참조번호 | Text | |
@@ -111,6 +124,11 @@ Secrets 등록: 저장소 → Settings → Secrets and variables → Actions →
 
 1. **서버 측 1차 필터** — `search_terms` 를 API 의 공고명 부분일치 파라미터로 넘겨 조회한다.
 2. **로컬 2차 필터** — 받아온 공고명·수요기관을 `terms` 에 대조해 점수를 매기고, `min_score` 미만은 버린다.
+3. **의미 조합 3차 필터(`combos`)** — 단어 하나로는 안 잡히는 사업을 조합으로 잡는다.
+
+> `○○연구원 전기·기계·소방·승강기 운영관리 위탁용역` 에는 **FM 이라는 단어가 없다.**
+> 하지만 전형적인 시설관리 사업이다. `(기계|전기|소방|승강기|…) AND (유지관리|운영관리|위탁|…)`
+> 조합 규칙으로 FM용역 축에 +5 를 준다. 현재 조합 규칙은 설비유지관리 · 건물종합관리 · 스마트시설 3개.
 
 | 축 | 대표 확장어 | 오탐 방지 |
 |---|---|---|
@@ -128,6 +146,64 @@ Secrets 등록: 저장소 → Settings → Secrets and variables → Actions →
 
 튜닝은 YAML 만 고치면 되고, 코드 수정이 필요 없다.
 `min_score` 를 올리면 정밀도가, 내리면 재현율이 올라간다.
+
+---
+
+## 4-2. 참가자격 판정 (`config/company.yaml`, `config/rules.yaml`)
+
+### ⚠️ 먼저 회사 프로필을 채워야 한다
+
+`config/company.yaml` 은 지금 **자리표시자**다. 여기가 비어 있으면 판정이 무의미하거나 틀린다.
+
+```yaml
+company:
+  name: "(회사명 입력)"
+  scale: large_enterprise        # large_enterprise | middle_standing | sme | small
+  is_software_business: false
+  headquarters_region: "경기도"
+  branch_regions: []
+  licenses: []                   # 예) 시설물유지관리업, 정보통신공사업, 전기공사업
+```
+
+`licenses` 가 비어 있으면 면허 판정을 **아예 건너뛴다**(설정 미완료를 오판으로 만들지 않기 위해).
+
+### 판정 규칙과 근거
+
+| 코드 | 사유 | 근거 필드 / 소스 | 판정 |
+|---|---|---|---|
+| R01 | 지역제한 | `getBidPblancListInfoPrtcptPsblRgn` 의 `prtcptPsblRgnNm` | 불일치 시 **참여불가** |
+| R02 | 대기업 참여제한 | `infoBizYn`(정보화사업) + 회사 규모 | 항상 **검토필요** |
+| R03 | 중소기업자간 경쟁 | 공고명·계약방법·낙찰방법 문자열 | 대기업·중견이면 **참여불가** |
+| R04 | 소기업·소상공인 제한 | 동일 | 대기업·중견이면 **참여불가** |
+| R05 | 면허 미보유 | `indstrytyLmtYn` + `getBidPblancListInfoLicenseLimit` | 불일치 **참여불가** / 목록 미확보 **검토필요** |
+| R07 | 실적 제한 | `arsltCmptYn` | **검토필요** |
+| R09 | 공동수급 조건 | `jntcontrctDutyRgnNm1~3` | 의무지역 불일치 시 **검토필요** |
+| R10 | 기타 참가자격 제한 | `dsgntCmptYn`(지명경쟁) / `bidPrtcptLmtYn` | 지명경쟁 **참여불가**, 그 외 **검토필요** |
+
+**R02 를 참여불가로 처리하지 않는 이유**: 정보화사업 대기업 참여제한은 사업 유형·금액·예외 인정
+여부에 따라 달라지고, 대규모·복잡한 시스템 통합처럼 대기업 참여가 불가피한 사업으로 인정되는
+규정도 있다. Boolean 하나로 결론 낼 수 없어 사람이 확인하도록 남긴다.
+
+**지역제한 판정에 보조 API 가 필요한 이유**: 입찰공고 목록 응답에는 "지역제한이 걸려 있다"는
+신호(`rgnLmtBidLocplcJdgmBssNm`)만 있고 **어느 지역인지는 없다.** 그래서 참가가능지역정보조회를
+따로 부른다. 두 보조 오퍼레이션 모두 `inqryDiv=1` 로 기간 일괄 조회가 되므로 공고 건별 호출이
+아니라 **기간당 2회**만 추가된다. `--no-enrich` 로 끌 수 있다.
+
+지사 소재지는 공고가 **지사투찰을 허용(`brffcBidprcPermsnYn=Y`)할 때만** 인정한다.
+
+## 4-3. 수주검토 점수 (Opportunity Score)
+
+| 항목 | 배점 | 산출 |
+|---|---:|---|
+| 사업 적합성 | 30 | 키워드 관련도 / `business_fit_full_score` 정규화 |
+| 사업영역 적합 | 20 | 매칭 축 중 `company.business_areas` 에 속하는 비율 |
+| 사업규모 | 15 | sweet spot 구간 만점, `min_krw` 미만 0점, 가격 미상 절반 |
+| 지역 | 10 | 지역제한 없음 또는 우리 지역 포함 시 만점 |
+| 기술 적합성 | 10 | IoT / BEMS / 통합관제 / AI 축에 걸리면 만점 |
+| 참가자격 | 15 | 참여가능 15 / 검토필요 7 / 참여불가 0 |
+| **합계** | **100** | `review_threshold`(기본 70) 이상이 영업 우선검토 |
+
+배점은 `config/rules.yaml` 에서 조정한다. 합계가 100 이 아니면 로딩 시 오류로 잡는다.
 
 ---
 
@@ -211,23 +287,32 @@ python -m g2b_watch.cli collect --days 2
 
 ```
 config/
-  sources.yaml      API 엔드포인트 후보 + 호출 설정
-  keywords.yaml     키워드 축 · 가중치 · 제외어
+  sources.yaml      API 엔드포인트 + 호출 설정
+  keywords.yaml     키워드 축 · 가중치 · 제외어 · 의미조합
+  company.yaml      회사 프로필 (⚠️ 값 입력 필요)
+  rules.yaml        제한 코드 · 판정 규칙 · 점수 배점
 src/g2b_watch/
-  config.py         YAML → 타입 있는 설정 객체
-  g2b_client.py     JSON/XML 양쪽 파싱, variant 탐색, 페이징, 재시도
-  normalize.py      응답 필드명 후보 매핑 → 공통 레코드
-  matcher.py        키워드 매칭 · 점수 계산
+  config.py         sources/keywords → 타입 있는 설정 객체
+  company.py        company/rules → 타입 있는 설정 객체
+  g2b_client.py     JSON/XML 파싱, 인증키 정규화, 페이징, 재시도
+  normalize.py      응답 → 공통 레코드 (개인정보 필드 제외)
+  matcher.py        키워드 · 의미조합 매칭 및 관련도
+  enrich.py         참가가능지역 · 면허제한 보조 조회
+  qualification.py  참가자격 판정 엔진
+  scoring.py        수주검토 점수
   notion_sink.py    중복 조회 + 페이지 생성
   cli.py            probe / collect
-tests/              네트워크 없이 도는 단위·통합 테스트 21건
+tests/              네트워크 없이 도는 단위·통합 테스트 48건
 ```
 
 ---
 
 ## 9. 다음 단계 후보
 
-- 낙찰정보 API 연동 → 경쟁사·낙찰가율 분석
-- 사전규격 → 입찰공고 자동 연결(같은 사업의 진행 단계 추적)
+- **사전규격정보서비스 연동** — 별도 활용신청 + 명세 확보 후 `prestd` 소스 활성화
+- **LLM 분류(3차)** — 규칙으로 못 잡는 공고를 LLM 이 FM/ENERGY/IoT/BEMS/ICT 로 분류
+- **AI 공고 요약** — 사업 개요·주요 업무·리스크·추천을 자동 생성
+- 낙찰정보 API 연동 → 경쟁사·낙찰가율·발주처 분석
 - 첨부 규격서 다운로드 및 본문 키워드 매칭(제목만으로는 놓치는 건 보완)
+- Streamlit 대시보드
 - 알림 채널(메일/Slack) 추가 — 현재는 Notion 적재만

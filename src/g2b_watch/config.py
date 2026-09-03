@@ -81,11 +81,26 @@ class Axis:
 
 
 @dataclass(frozen=True)
+class Combo:
+    """단어 하나로는 안 잡히는 사업을 의미 조합으로 잡는 규칙.
+
+    all_of 의 모든 그룹에서 최소 1개씩 걸려야 성립한다.
+    예) (기계|전기|소방|승강기) AND (유지관리|운영관리|위탁) → FM용역
+    """
+
+    id: str
+    axis: str
+    weight: int
+    all_of: tuple[tuple[str, ...], ...]
+
+
+@dataclass(frozen=True)
 class KeywordConfig:
     min_score: int
     min_axes: int
     exclude_global: tuple[str, ...]
     axes: tuple[Axis, ...]
+    combos: tuple[Combo, ...] = ()
 
     def all_search_terms(self) -> tuple[str, ...]:
         seen: dict[str, None] = {}
@@ -175,9 +190,24 @@ def load_keywords(path: str | os.PathLike[str] | None = None) -> KeywordConfig:
             )
         )
 
+    axis_ids = {a.id for a in axes}
+    combos: list[Combo] = []
+    for raw in doc.get("combos", []):
+        if raw["axis"] not in axis_ids:
+            raise ValueError(f"combo '{raw['id']}' 가 존재하지 않는 축 '{raw['axis']}' 을 가리킵니다")
+        combos.append(
+            Combo(
+                id=raw["id"],
+                axis=raw["axis"],
+                weight=int(raw.get("weight", 1)),
+                all_of=tuple(tuple(g) for g in raw.get("all_of", [])),
+            )
+        )
+
     return KeywordConfig(
         min_score=int(doc.get("min_score", 3)),
         min_axes=int(doc.get("min_axes", 1)),
         exclude_global=tuple(doc.get("exclude_global", [])),
         axes=tuple(axes),
+        combos=tuple(combos),
     )

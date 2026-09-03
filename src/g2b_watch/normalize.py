@@ -33,6 +33,26 @@ BID_FIELDS: dict[str, tuple[str, ...]] = {
     "ref_no": ("refNo",),                 # 참조번호
 }
 
+# 참가자격 판정에 쓰는 Y/N·문자열 필드 (물품/용역 PPSSrch 응답에 실재)
+QUALIFICATION_FLAGS: dict[str, str] = {
+    "industry_limited": "indstrytyLmtYn",        # 업종(면허)제한여부
+    "designated_competition": "dsgntCmptYn",     # 지명경쟁여부
+    "performance_competition": "arsltCmptYn",    # 실적경쟁여부 (용역)
+    "participation_limited": "bidPrtcptLmtYn",   # 입찰참가제한여부 (용역)
+    "info_business": "infoBizYn",                # 정보화사업여부
+    "branch_bid_allowed": "brffcBidprcPermsnYn", # 지사투찰허용여부
+    "international": "intrbidYn",                # 국제입찰여부
+}
+
+QUALIFICATION_TEXTS: dict[str, tuple[str, ...]] = {
+    "region_limit_basis": ("rgnLmtBidLocplcJdgmBssNm",),  # 지역제한입찰 소재지판단기준명
+    "joint_supply_method": ("cmmnSpldmdMethdNm",),        # 공동수급방식명
+    "bid_method": ("sucsfbidMthdNm",),                    # 낙찰방법명
+}
+
+# 지역의무공동도급 지역명 (용역 응답, 최대 3개)
+JOINT_REGION_FIELDS = ("jntcontrctDutyRgnNm1", "jntcontrctDutyRgnNm2", "jntcontrctDutyRgnNm3")
+
 # 사전규격은 별도 서비스(「조달청_나라장터 사전규격정보서비스」)이고 명세를 아직 받지 못했다.
 # config/sources.yaml 에서 해당 소스를 비활성화해 두었으며, 아래 후보는 미검증이다.
 PRESTD_FIELDS: dict[str, tuple[str, ...]] = {
@@ -74,7 +94,40 @@ class Record:
     ref_no: str = ""
     axes: tuple[str, ...] = ()
     score: int = 0
+
+    # --- 참가자격 판정 입력 (공고 응답에서 그대로 읽은 값) ---
+    industry_limited: bool = False
+    designated_competition: bool = False
+    performance_competition: bool = False
+    participation_limited: bool = False
+    info_business: bool = False
+    branch_bid_allowed: bool = False
+    international: bool = False
+    region_limit_basis: str = ""
+    joint_supply_method: str = ""
+    bid_method: str = ""
+    joint_contract_regions: tuple[str, ...] = ()
+
+    # --- 보조 API 로 채우는 값 ---
+    allowed_regions: tuple[str, ...] = ()      # 참가가능지역정보조회
+    required_licenses: tuple[str, ...] = ()    # 면허제한정보조회
+
+    # --- 판정·점수 결과 ---
+    verdict: str = ""
+    restriction_codes: tuple[str, ...] = ()
+    restriction_reasons: tuple[str, ...] = ()
+    opportunity_score: int = 0
+    score_breakdown: dict[str, int] = field(default_factory=dict)
+
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
+
+    @property
+    def notice_key(self) -> tuple[str, str]:
+        """보조 API 결과와 조인할 때 쓰는 (공고번호, 차수)."""
+        return (
+            str(self.raw.get("bidNtceNo", "")).strip(),
+            str(self.raw.get("bidNtceOrd", "")).strip(),
+        )
 
 
 def _first(item: dict[str, Any], keys: tuple[str, ...]) -> str:
@@ -145,6 +198,15 @@ def to_record(item: dict[str, Any], *, source_id: str, kind: str, label: str) ->
     if not key or not title:
         return None
 
+    flags = {
+        name: _first(item, (src,)).upper() == "Y"
+        for name, src in QUALIFICATION_FLAGS.items()
+    }
+    texts = {name: _first(item, keys) for name, keys in QUALIFICATION_TEXTS.items()}
+    joint_regions = tuple(
+        v for v in (_first(item, (f,)) for f in JOINT_REGION_FIELDS) if v
+    )
+
     return Record(
         key=key,
         title=title,
@@ -160,5 +222,8 @@ def to_record(item: dict[str, Any], *, source_id: str, kind: str, label: str) ->
         contract_method=_first(item, fields["contract_method"]),
         url=_first(item, fields["url"]) or None,
         ref_no=_first(item, fields["ref_no"]),
+        joint_contract_regions=joint_regions,
         raw=item,
+        **flags,
+        **texts,
     )

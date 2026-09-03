@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from functools import lru_cache
 
-from .config import Axis, KeywordConfig, Term
+from .config import Axis, Combo, KeywordConfig, Term
 
 
 @dataclass(frozen=True)
@@ -58,6 +58,11 @@ def match(text_parts: tuple[str | None, ...], cfg: KeywordConfig) -> MatchResult
         if bad in raw or bad in squeezed:
             return MatchResult(False, 0, (), (), f"전역 제외어: {bad}")
 
+    # 축별 조합 규칙을 먼저 모아 둔다
+    combos_by_axis: dict[str, list[Combo]] = {}
+    for combo in cfg.combos:
+        combos_by_axis.setdefault(combo.axis, []).append(combo)
+
     total = 0
     matched_axes: list[str] = []
     hits: list[str] = []
@@ -71,6 +76,11 @@ def match(text_parts: tuple[str | None, ...], cfg: KeywordConfig) -> MatchResult
             if pattern.search(raw) or pattern.search(squeezed):
                 axis_score += term.weight
                 hits.append(f"{axis.id}:{term.pattern}(+{term.weight})")
+
+        for combo in combos_by_axis.get(axis.id, []):
+            if all(any(t in raw or t in squeezed for t in group) for group in combo.all_of):
+                axis_score += combo.weight
+                hits.append(f"{axis.id}:[{combo.id}](+{combo.weight})")
 
         if axis_score > 0:
             matched_axes.append(axis.id)

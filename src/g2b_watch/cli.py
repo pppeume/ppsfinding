@@ -9,11 +9,15 @@ import sys
 from datetime import datetime, timedelta
 from typing import Any
 
+from .company import load_company, load_rules
 from .config import KeywordConfig, Source, load_keywords, load_sources
+from .enrich import Enrichment, fetch_enrichment
 from .g2b_client import ApiPage, G2BClient, G2BError
 from .matcher import match
 from .normalize import KST, Record, to_record
 from .notion_sink import NotionSink
+from .qualification import evaluate
+from .scoring import score as score_record
 
 log = logging.getLogger("g2b_watch")
 
@@ -132,15 +136,52 @@ def cmd_collect(args: argparse.Namespace) -> int:
             records[rec.key] = rec
             stats["matched"] += 1
 
-    ordered = sorted(records.values(), key=lambda r: (-r.score, r.notice_dt or ""))
+    # --- 참가자격 판정 + 수주검토 점수 ---------------------------------
+    company = load_company(args.company)
+    rules = load_rules(args.rules)
+    if not company.is_configured:
+        log.warning(
+            "config/company.yaml 이 아직 자리표시자입니다 — 참가자격 판정을 신뢰하지 마세요 "
+            "(회사명/보유면허 미입력)"
+        )
+
+    enrichment = Enrichment()
+    if records and not args.no_enrich:
+        enrichment = fetch_enrichment(client, begin, end)
+
+    for rec in records.values():
+        rec.allowed_regions = enrichment.allowed_regions(rec.notice_key)
+        rec.required_licenses = enrichment.required_licenses(rec.notice_key)
+        q = evaluate(rec, company, rules)
+        rec.verdict = q.verdict
+        rec.restriction_codes = q.codes
+        rec.restriction_reasons = q.reasons
+        rec.opportunity_score, rec.score_breakdown = score_record(rec, company, rules)
+
+    ordered = sorted(
+        records.values(),
+        key=lambda r: (-r.opportunity_score, -r.score, r.notice_dt or ""),
+    )
+    if args.min_opportunity is not None:
+        ordered = [r for r in ordered if r.opportunity_score >= args.min_opportunity]
     if args.limit:
         ordered = ordered[: args.limit]
 
-    print(f"\n원시 {stats['fetched']}건 → 파싱 {stats['parsed']}건 → 키워드 매칭 {len(ordered)}건")
+    by_verdict: dict[str, int] = {}
     for rec in ordered:
-        axes = ",".join(rec.axes)
+        by_verdict[rec.verdict] = by_verdict.get(rec.verdict, 0) + 1
+
+    print(f"\n원시 {stats['fetched']}건 → 파싱 {stats['parsed']}건 → 키워드 매칭 {stats['matched']}건 → 적재대상 {len(ordered)}건")
+    print("  판정: " + " / ".join(f"{k} {v}건" for k, v in by_verdict.items()) if by_verdict else "  판정: 없음")
+    print(f"  영업 우선검토({rules.review_threshold}점 이상): "
+          f"{sum(1 for r in ordered if r.opportunity_score >= rules.review_threshold)}건\n")
+    for rec in ordered:
         price = f"{rec.price:,}원" if rec.price else "-"
-        print(f"  [{rec.score:>2}] {rec.business_type} | {rec.title[:60]} | {rec.demand_org} | {price} | {axes}")
+        codes = ",".join(rec.restriction_codes) or "-"
+        print(
+            f"  {rec.opportunity_score:>3}점 [{rec.verdict}] {rec.business_type} | "
+            f"{rec.title[:50]} | {rec.demand_org} | {price} | {','.join(rec.axes)} | {codes}"
+        )
 
     if args.json_out:
         payload = [
@@ -189,7 +230,13 @@ def build_parser() -> argparse.ArgumentParser:
                            help="keyword: 검색어별 호출 / full: 기간 전체 스캔 후 로컬 필터")
     p_collect.add_argument("--dedup-days", type=int, default=14, help="중복 판정에 볼 Notion 최근 적재 기간")
     p_collect.add_argument("--min-score", type=int, default=None, help="keywords.yaml 의 min_score 를 덮어쓴다")
-    p_collect.add_argument("--limit", type=int, default=None, help="적재 상한(관련도 높은 순)")
+    p_collect.add_argument("--limit", type=int, default=None, help="적재 상한(수주검토 점수 높은 순)")
+    p_collect.add_argument("--company", default=None, help="company.yaml 경로")
+    p_collect.add_argument("--rules", default=None, help="rules.yaml 경로")
+    p_collect.add_argument("--min-opportunity", type=int, default=None,
+                           help="이 수주검토 점수 미만은 적재하지 않는다")
+    p_collect.add_argument("--no-enrich", action="store_true",
+                           help="참가가능지역·면허제한 보조 조회를 건너뛴다(호출 수 절약)")
     p_collect.add_argument("--dry-run", action="store_true", help="Notion 에 쓰지 않고 로그만")
     p_collect.add_argument("--no-notion", action="store_true", help="Notion 단계를 아예 건너뛴다")
     p_collect.add_argument("--json-out", default=None, help="결과를 JSON 파일로도 저장")
