@@ -230,23 +230,42 @@ company:
 `.go.kr` 원본 서버 두 곳이 모두 막혔고 DNS·IPv6 는 정상이다. **인증키와 무관하게
 패킷이 서버에 도달하지 못한다.** `probe` 명령이 이 진단을 자동으로 찍어 준다.
 
-#### 방법 1 — 국내 PC/서버에서 직접 (가장 빠름, 무료)
+#### 방법 1 — 국내 PC 에서 더블클릭 (가장 빠름, 무료, 개발 도구 불필요)
+
+**필요한 것은 파이썬 하나뿐이다.** git 도 터미널 지식도 필요 없다.
+
+1. [python.org/downloads](https://www.python.org/downloads/) 에서 파이썬 설치
+   설치 첫 화면의 **`Add python.exe to PATH`** 체크박스를 반드시 켠다.
+2. 저장소를 ZIP 으로 받아 압축을 푼다
+   (GitHub 저장소 → 초록 `Code` 버튼 → `Download ZIP`)
+3. `.env.example` 을 복사해 **`.env`** 로 이름을 바꾸고, 메모장으로 열어 인증키 3개를 채운다
+4. 아래 파일을 순서대로 더블클릭
+
+| 파일 | 하는 일 |
+|---|---|
+| `run1-probe.bat` | 연결·인증키 진단. 출력 전체를 복사해 공유하면 된다 |
+| `run2-preview.bat` | 최근 3일치 미리보기. **Notion 에 아무것도 쓰지 않는다** |
+| `run3-collect.bat` | 실제 수집 후 Notion 적재 |
+
+처음 한 번은 가상환경을 만드느라 1~2분 걸린다. 창은 `pause` 로 열려 있으니 결과를 그대로 읽을 수 있다.
+
+macOS / Linux 는 같은 일을 셸에서 한다.
 
 ```bash
 cp .env.example .env      # 인증키 3개를 채운다
-./scripts/run_local.sh probe                          # 연결 확인
-./scripts/run_local.sh collect --dry-run --no-notion  # 결과만 미리보기
-./scripts/run_local.sh collect                        # 실제 적재
+./scripts/run_local.sh probe --dump
+./scripts/run_local.sh collect --days 3 --no-notion
+./scripts/run_local.sh collect
 ```
 
-Windows 는 `scripts\run_local.bat` 를 같은 인자로 쓰면 되고,
-**작업 스케줄러**에 등록하면 매일 자동 실행된다.
+**매일 자동 실행**은 Windows 작업 스케줄러에 등록한다.
 
 | 항목 | 값 |
 |---|---|
 | 프로그램/스크립트 | `C:\경로\ppsfinding\scripts\run_local.bat` |
-| 인수 추가 | `collect` |
+| 인수 추가 | `collect --days 2` |
 | 시작 위치 | `C:\경로\ppsfinding` |
+| 트리거 | 매일 / 평일 08:00 |
 
 #### 방법 2 — 국내 self-hosted runner (GitHub Actions 그대로 유지)
 
@@ -366,9 +385,12 @@ src/g2b_watch/
   scoring.py        수주검토 점수
   notion_sink.py    중복 조회 + 페이지 생성
   cli.py            probe / collect
+run1-probe.bat      진단        (Windows 더블클릭)
+run2-preview.bat    미리보기     (Windows 더블클릭, Notion 에 쓰지 않음)
+run3-collect.bat    수집·적재    (Windows 더블클릭)
 scripts/
-  run_local.sh      국내 PC/서버용 실행 스크립트 (macOS/Linux)
-  run_local.bat     국내 PC 용 실행 스크립트 (Windows, 작업 스케줄러 등록용)
+  run_local.sh      실행 스크립트 (macOS/Linux)
+  run_local.bat     공통 실행기   (Windows, 작업 스케줄러 등록 대상)
 tests/              네트워크 없이 도는 단위·통합 테스트 52건
 ```
 
