@@ -45,7 +45,37 @@ jobs:
       - name: 의존성 설치
         run: pip install -r requirements.txt
 
+      # Secrets 가 아직 등록되지 않은 상태에서 cron 이 돌면 매일 아침 CI 가 빨갛게 실패한다.
+      # 스케줄 실행은 경고만 남기고 건너뛰고, 사람이 직접 돌린 실행은 명확히 실패시킨다.
+      - name: Secrets 등록 여부 확인
+        id: preflight
+        env:
+          G2B_SERVICE_KEY: ${{ secrets.G2B_SERVICE_KEY }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+        run: |
+          missing=""
+          [ -n "$G2B_SERVICE_KEY" ]   || missing="$missing G2B_SERVICE_KEY"
+          [ -n "$NOTION_TOKEN" ]      || missing="$missing NOTION_TOKEN"
+          [ -n "$NOTION_DATABASE_ID" ]|| missing="$missing NOTION_DATABASE_ID"
+
+          if [ -z "$missing" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+          msg="등록되지 않은 Secret:$missing — Settings → Secrets and variables → Actions 에서 등록하세요. README 2절 참고."
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "::warning title=수집 건너뜀::$msg"
+            echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error title=Secrets 미등록::$msg"
+            exit 1
+          fi
+
       - name: 수집 및 Notion 적재
+        if: steps.preflight.outputs.ready == 'true'
         env:
           G2B_SERVICE_KEY: ${{ secrets.G2B_SERVICE_KEY }}
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}

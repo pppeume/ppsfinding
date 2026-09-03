@@ -126,6 +126,9 @@ Secrets 등록: 저장소 → Settings → Secrets and variables → Actions →
 
 수동 실행 시 `days`(조회 기간), `mode`, `dry_run` 을 지정할 수 있다.
 
+Secrets 가 하나라도 비어 있으면 수집 단계를 건너뛴다. **스케줄 실행은 경고만 남기고 성공** 처리하고
+(세팅 전까지 매일 아침 CI 가 빨개지지 않도록), **수동 실행은 어떤 Secret 이 없는지 알리고 실패**시킨다.
+
 ### 로컬
 
 ```bash
@@ -180,6 +183,7 @@ python -m g2b_watch.cli collect --days 2
 | `사용 가능한 오퍼레이션을 찾지 못했습니다` | `probe --dump` 실행 후 `config/sources.yaml` 의 variants 수정 |
 | Notion `object_not_found` | 인테그레이션을 대상 DB 에 연결하지 않았음 |
 | Notion `validation_error … is not a property that exists` | DB 속성 이름을 바꿨다. `notion_sink.py` 의 속성명과 맞출 것 |
+| 수집 워크플로가 "수집 건너뜀" 경고만 남기고 끝남 | Secrets 미등록. 위 2절대로 3개를 등록하면 다음 실행부터 정상 동작 |
 | 결과가 0건 | `--min-score 1 --no-notion` 으로 점수 분포부터 확인 |
 | 노이즈가 많음 | `keywords.yaml` 의 `exclude` / `exclude_global` 보강, `min_score` 상향 |
 | `max_pages 도달` 경고 | `config/sources.yaml` 의 `max_pages` 상향 |
