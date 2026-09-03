@@ -1,9 +1,10 @@
 """조달청 OpenAPI 응답 아이템을 Notion 적재용 공통 레코드로 변환.
 
-응답 필드명은 서비스/오퍼레이션 버전마다 조금씩 다르고, 이 저장소를 만든 시점에
-공공데이터포털 문서 원문을 직접 열어 확인하지 못했다. 그래서 필드는 단일 키가 아니라
-"후보 키 목록"으로 정의하고, 존재하는 첫 번째 값을 취한다.
-probe 명령의 --dump 옵션으로 실제 응답 키를 확인한 뒤 이 목록을 정리하면 된다.
+입찰공고(bid) 필드명은 「조달청 공공데이터 개방 OpenAPI 참고자료 v1.2」의
+getBidPblancListInfo{Thng,Servc}PPSSrch 응답 명세에서 확인한 값이다.
+값이 비어 오는 경우가 있어 의미가 같은 대체 필드까지 후보로 두고 첫 유효값을 취한다.
+
+담당자명·전화번호·이메일(ntceInsttOfclNm 등)은 개인정보라 의도적으로 매핑하지 않는다.
 """
 from __future__ import annotations
 
@@ -17,21 +18,23 @@ KST = timezone(timedelta(hours=9))
 # --- 필드 후보 정의 -----------------------------------------------------------
 
 BID_FIELDS: dict[str, tuple[str, ...]] = {
-    "notice_no": ("bidNtceNo",),
-    "notice_ord": ("bidNtceOrd",),
-    "title": ("bidNtceNm",),
-    "notice_kind": ("ntceKindNm",),
-    "demand_org": ("dminsttNm", "dminsttOfclNm"),
-    "notice_org": ("ntceInsttNm",),
-    "notice_dt": ("bidNtceDt", "rgstDt"),
-    "close_dt": ("bidClseDt", "bidBeginDt"),
-    "opening_dt": ("opengDt",),
-    "price": ("presmptPrce", "asignBdgtAmt", "bdgtAmt"),
-    "contract_method": ("cntrctCnclsMthdNm", "bidMethdNm"),
-    "url": ("bidNtceDtlUrl", "bidNtceUrl"),
-    "ref_no": ("refNo", "ntceSpecDocUrl1"),
+    "notice_no": ("bidNtceNo",),          # 입찰공고번호
+    "notice_ord": ("bidNtceOrd",),        # 입찰공고차수 (예: "000")
+    "title": ("bidNtceNm",),              # 입찰공고명
+    "notice_kind": ("ntceKindNm",),       # 공고종류명 (등록공고/변경공고/취소공고/재공고)
+    "demand_org": ("dminsttNm",),         # 수요기관명
+    "notice_org": ("ntceInsttNm",),       # 공고기관명
+    "notice_dt": ("bidNtceDt", "rgstDt"), # 입찰공고일시 → 없으면 등록일시
+    "close_dt": ("bidClseDt",),           # 입찰마감일시
+    "opening_dt": ("opengDt",),           # 개찰일시
+    "price": ("presmptPrce", "asignBdgtAmt"),      # 추정가격 → 없으면 배정예산금액
+    "contract_method": ("cntrctCnclsMthdNm",),     # 계약체결방법명
+    "url": ("bidNtceDtlUrl", "bidNtceUrl"),        # 입찰공고상세URL
+    "ref_no": ("refNo",),                 # 참조번호
 }
 
+# 사전규격은 별도 서비스(「조달청_나라장터 사전규격정보서비스」)이고 명세를 아직 받지 못했다.
+# config/sources.yaml 에서 해당 소스를 비활성화해 두었으며, 아래 후보는 미검증이다.
 PRESTD_FIELDS: dict[str, tuple[str, ...]] = {
     "notice_no": ("bfSpecRgstNo", "prdctClsfcNo"),
     "notice_ord": (),

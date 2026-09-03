@@ -1,6 +1,6 @@
 # ppsfinding — 나라장터(G2B) 입찰공고 키워드 모니터링
 
-조달청 나라장터의 **물품·용역 입찰공고**와 **사전규격(발주예고)** 을
+조달청 나라장터의 **물품·용역 입찰공고**를
 `IoT / BEMS / FM용역 / 통합관제 / 에너지 / AI` 6개 키워드 축으로 자동 수집해
 **Notion 데이터베이스에 적재**한다. 실행은 GitHub Actions 가 **평일 08:00(KST)에 1회** 담당한다.
 
@@ -20,27 +20,44 @@ GitHub Actions (cron: 평일 08:00 KST)
 ## 1. 왜 웹 스크래핑이 아니라 OpenAPI 인가
 
 조달청은 공공데이터포털에 [「조달청_나라장터 입찰공고정보서비스」(데이터 15129394)](https://www.data.go.kr/data/15129394/openapi.do)를
-공식 개방하고 있고, **업무구분(물품/용역/공사/외자)마다 오퍼레이션이 분리**되어 있다.
-`g2b.go.kr` 화면을 직접 크롤링하는 방식보다 안정적이고 약관 리스크가 없다.
+공식 개방한다. `g2b.go.kr` 화면을 직접 크롤링하는 방식보다 안정적이고 약관 리스크가 없다.
 
-관련 서비스(확장 여지):
+### 사용 중인 오퍼레이션 (명세 확정됨)
+
+「조달청 공공데이터 개방 OpenAPI 참고자료 v1.2」(2026.04.10) 원문 기준이다.
+
+| 항목 | 값 |
+|---|---|
+| 서비스 ID | `BidPublicInfoService` (버전 3.1) |
+| 엔드포인트 | `https://apis.data.go.kr/1230000/ad/BidPublicInfoService` |
+| 인증 파라미터 | `ServiceKey` (**대문자 S**) |
+| 물품 | `getBidPblancListInfoThngPPSSrch` |
+| 용역 | `getBidPblancListInfoServcPPSSrch` |
+| 조회구분 | `inqryDiv=1` (공고게시일시 기준) |
+| 기간 | `inqryBgnDt` / `inqryEndDt`, `YYYYMMDDHHMM` |
+| 키워드 | `bidNtceNm` (공고명 **부분일치**) |
+| 처리 한도 | 30 tps |
+
+문서상 업무구분별로 두 계열이 있다.
+
+- `getBidPblancListInfo{Thng,Servc}` — 등록일시·공고번호·변경일시로만 조회. **키워드 검색 불가**
+- `getBidPblancListInfo{Thng,Servc}PPSSrch` — 위에 더해 공고명·기관명·추정가격 범위·참가제한지역 등 지원
+
+키워드 모니터링이 목적이므로 **PPSSrch 계열**을 쓴다.
+
+### ⚠️ 사전규격(발주예고)은 아직 비활성
+
+제공된 명세서의 오퍼레이션 25종 어디에도 사전규격 목록 조회가 없다.
+「조달청_나라장터 사전규격정보서비스」라는 **별도 서비스**로 분리되어 있어,
+그 서비스의 활용신청과 명세서를 받기 전까지 `config/sources.yaml` 의 `prestd` 소스는 `enabled: false` 다.
+
+입찰공고 응답에 사전규격등록번호(`bfSpecRgstNo`)가 들어 있어, 나중에 두 소스를 연결하는 것은 가능하다.
+
+### 확장 여지
+
 [낙찰정보](https://www.data.go.kr/data/15129397/openapi.do) ·
 [계약정보](https://www.data.go.kr/data/15129427/openapi.do) ·
 [계약과정통합공개](https://www.data.go.kr/data/15129459/openapi.do)
-
-### ⚠️ 아직 검증되지 않은 부분 (반드시 읽을 것)
-
-`config/sources.yaml` 의 **오퍼레이션 경로와 날짜 파라미터명은 "후보"** 다.
-이 저장소를 작성한 환경에서 `data.go.kr` 접근이 차단되어 API 문서 원문을 직접 열어
-확인하지 못했기 때문이다. 추정으로 하나를 확정해 두는 대신, 다음과 같이 설계했다.
-
-- 각 소스는 여러 **variant**(경로 + 날짜 파라미터 조합)를 가진다.
-- 클라이언트가 순서대로 1건씩 호출해 보고, **최초로 정상 응답(resultCode `00`)한 조합**을 그 실행 동안 사용한다.
-- `probe` 명령으로 어떤 조합이 살아있는지 먼저 확인할 수 있다.
-
-**최초 세팅 시 `API 엔드포인트 진단` 워크플로를 반드시 한 번 돌리고**,
-살아있는 variant 만 남기고 나머지는 `config/sources.yaml` 에서 지우면 매 실행 호출 수가 줄어든다.
-특히 **사전규격(`prestd_*`) 소스는 오퍼레이션명 근거가 가장 약하므로** 진단 결과에 따라 수정이 필요할 가능성이 높다.
 
 ---
 
@@ -48,13 +65,13 @@ GitHub Actions (cron: 평일 08:00 KST)
 
 | 항목 | 발급처 | GitHub Secret 이름 |
 |---|---|---|
-| 조달청 OpenAPI 인증키 | data.go.kr 회원가입 → 「조달청_나라장터 입찰공고정보서비스」 활용신청 → **일반 인증키(Decoding)** | `G2B_SERVICE_KEY` |
+| 조달청 OpenAPI 인증키 | data.go.kr 회원가입 → 「조달청_나라장터 입찰공고정보서비스」 활용신청 → 일반 인증키 (Encoding/Decoding 무관) | `G2B_SERVICE_KEY` |
 | Notion 인테그레이션 토큰 | notion.so/my-integrations → New integration → Internal Integration Secret | `NOTION_TOKEN` |
 | Notion 데이터베이스 ID | 대상 DB 페이지 URL 의 32자리 hex | `NOTION_DATABASE_ID` |
 
-> **인증키 주의**: 포털은 Encoding/Decoding 두 가지 키를 준다. 이 코드는 `requests` 가 직접
-> URL 인코딩하므로 반드시 **Decoding 키**를 넣어야 한다. Encoding 키를 넣으면 이중 인코딩되어
-> `SERVICE_KEY_IS_NOT_REGISTERED_ERROR` 가 난다.
+> **인증키**: 포털은 같은 키를 Encoding / Decoding 두 형태로 보여준다. **둘 중 아무거나 넣어도 된다.**
+> 클라이언트가 퍼센트 인코딩된 키를 감지하면 디코딩해서 쓰기 때문에, Encoding 키를 넣어도
+> 이중 인코딩(`%2B` → `%252B`)으로 인한 `SERVICE_KEY_IS_NOT_REGISTERED_ERROR` 가 나지 않는다.
 >
 > **Notion 연결 주의**: 토큰을 만든 뒤 **대상 데이터베이스 페이지에서 `···` → 연결 → 해당 인테그레이션을 추가**해야 한다.
 > 이 단계를 빠뜨리면 `object_not_found` 가 난다.
@@ -134,7 +151,7 @@ Secrets 가 하나라도 비어 있으면 수집 단계를 건너뛴다. **스�
 ```bash
 pip install -r requirements.txt
 export PYTHONPATH=src
-export G2B_SERVICE_KEY='...'          # Decoding 키
+export G2B_SERVICE_KEY='...'          # Encoding/Decoding 무관
 export NOTION_TOKEN='secret_...'
 export NOTION_DATABASE_ID='...'
 
@@ -179,7 +196,7 @@ python -m g2b_watch.cli collect --days 2
 
 | 증상 | 원인 / 조치 |
 |---|---|
-| `SERVICE_KEY_IS_NOT_REGISTERED_ERROR` | Encoding 키를 넣었거나 활용신청 승인 전. **Decoding 키**로 교체 |
+| `SERVICE_KEY_IS_NOT_REGISTERED_ERROR` | 활용신청이 아직 승인되지 않았거나 키를 잘못 복사함. 포털 마이페이지에서 승인 상태 확인 |
 | `사용 가능한 오퍼레이션을 찾지 못했습니다` | `probe --dump` 실행 후 `config/sources.yaml` 의 variants 수정 |
 | Notion `object_not_found` | 인테그레이션을 대상 DB 에 연결하지 않았음 |
 | Notion `validation_error … is not a property that exists` | DB 속성 이름을 바꿨다. `notion_sink.py` 의 속성명과 맞출 것 |

@@ -14,6 +14,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Iterator
+from urllib.parse import unquote
 
 import requests
 
@@ -26,6 +27,18 @@ SUCCESS_CODES = {"00", "0"}
 
 class G2BError(RuntimeError):
     """복구 불가능한 API 오류(인증 실패, 쿼터 초과 등)."""
+
+
+def normalize_service_key(raw: str) -> str:
+    """공공데이터포털이 주는 두 형태의 인증키를 모두 받아 디코딩된 형태로 통일한다.
+
+    포털은 같은 키를 Encoding(퍼센트 인코딩)과 Decoding 두 가지로 보여준다.
+    requests 가 쿼리스트링을 만들 때 다시 인코딩하므로, Encoding 키를 그대로 넘기면
+    '%2B' 의 '%' 가 '%25' 로 이중 인코딩되어 SERVICE_KEY_IS_NOT_REGISTERED_ERROR 가 난다.
+    Decoding 키(base64 문자셋 + / =)에는 '%' 가 없으므로 unquote 는 무해하다.
+    """
+    key = raw.strip()
+    return unquote(key) if "%" in key else key
 
 
 @dataclass
@@ -97,7 +110,7 @@ class G2BClient:
     def __init__(self, service_key: str, api: ApiSettings, session: requests.Session | None = None):
         if not service_key:
             raise G2BError("G2B_SERVICE_KEY 가 비어 있습니다 (data.go.kr 일반 인증키 '디코딩' 값)")
-        self.service_key = service_key
+        self.service_key = normalize_service_key(service_key)
         self.api = api
         self.session = session or requests.Session()
         self._resolved: dict[str, Variant] = {}
@@ -107,7 +120,7 @@ class G2BClient:
     def _call(self, variant: Variant, params: dict[str, str]) -> ApiPage:
         url = f"{self.api.base}/{variant.path}"
         query = {
-            "serviceKey": self.service_key,
+            self.api.service_key_param: self.service_key,
             "type": "json",
             **params,
         }
