@@ -210,26 +210,67 @@ company:
 
 ## 5. 실행
 
-### ⚠️ 실행 위치 — GitHub 호스티드 러너에서는 조달청 API 에 닿지 않는다
+### ⚠️ 실행 위치 — 반드시 국내 네트워크에서 돌려야 한다
 
-2026-09-03 진단 결과, GitHub 호스티드 러너에서 `apis.data.go.kr` 의 **80·443 포트 모두 TCP
-연결 타임아웃**이다. 인증·경로 문제가 아니라 네트워크 도달 자체가 안 된다.
+**조달청·나라장터 서버는 해외 IP 를 차단한다.** GitHub 호스티드 러너(미국 Azure)에서
+2026-09-03 에 측정한 결과다.
 
 ```
-네트워크 진단 — apis.data.go.kr
-  http  :80   타임아웃 (방화벽/미개방 가능성)
-  https :443  타임아웃 (방화벽/미개방 가능성)
+1. DNS      apis.data.go.kr → 27.101.236.63   정상 해석
+2. TCP      :80 타임아웃    :443 타임아웃
+3. IPv4강제 curl (28) timeout, connect=0.000000s    TCP 핸드셰이크 자체가 안 됨
+4. IPv6     AAAA 레코드 없음                          IPv6 문제 아님
+5. 다른 호스트
+     https://www.data.go.kr   타임아웃
+     https://www.g2b.go.kr    타임아웃
+     https://www.naver.com    200  (단, Akamai 미국 엣지라 한국 서버가 아님)
+6. 러너      52.165.62.83  Des Moines, Iowa, US (Microsoft Azure)
 ```
 
-따라서 수집 워크플로는 **국내 네트워크에서 실행**해야 한다. 선택지:
+`.go.kr` 원본 서버 두 곳이 모두 막혔고 DNS·IPv6 는 정상이다. **인증키와 무관하게
+패킷이 서버에 도달하지 못한다.** `probe` 명령이 이 진단을 자동으로 찍어 준다.
 
-| 방식 | 비용 | 특징 |
-|---|---|---|
-| GitHub Actions **self-hosted runner** (국내 PC/서버) | 0원 | 워크플로 파일 그대로. `runs-on` 만 교체. PC 가 켜져 있어야 함 |
-| 국내 VPS + cron | 월 수천원~ | 상시 동작. 워크플로 대신 cron 으로 `python -m g2b_watch.cli collect` |
-| 사내 서버 / NAS 스케줄러 | 0원 | 사내 방화벽 정책 확인 필요 |
+#### 방법 1 — 국내 PC/서버에서 직접 (가장 빠름, 무료)
 
-`probe` 명령이 실행 첫머리에 80/443 도달 여부를 출력하므로, 옮긴 환경에서 먼저 확인하면 된다.
+```bash
+cp .env.example .env      # 인증키 3개를 채운다
+./scripts/run_local.sh probe                          # 연결 확인
+./scripts/run_local.sh collect --dry-run --no-notion  # 결과만 미리보기
+./scripts/run_local.sh collect                        # 실제 적재
+```
+
+Windows 는 `scripts\run_local.bat` 를 같은 인자로 쓰면 되고,
+**작업 스케줄러**에 등록하면 매일 자동 실행된다.
+
+| 항목 | 값 |
+|---|---|
+| 프로그램/스크립트 | `C:\경로\ppsfinding\scripts\run_local.bat` |
+| 인수 추가 | `collect` |
+| 시작 위치 | `C:\경로\ppsfinding` |
+
+#### 방법 2 — 국내 self-hosted runner (GitHub Actions 그대로 유지)
+
+국내 PC/사내 서버에 GitHub Actions 러너를 설치한다.
+Settings → Actions → Runners → **New self-hosted runner** 안내대로 하면 된다.
+
+설치 후 **Settings → Secrets and variables → Actions → Variables 탭**에서
+변수 하나만 추가하면 워크플로가 그 러너로 넘어간다.
+
+| Name | Value |
+|---|---|
+| `RUNNER_LABEL` | `self-hosted` |
+
+`collect.yml` / `probe.yml` 의 `runs-on` 이 `${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}`
+라서 코드 수정이 필요 없다. 변수를 지우면 다시 GitHub 러너로 돌아간다.
+(`tests.yml` 은 네트워크가 필요 없어 GitHub 러너를 계속 쓴다.)
+
+#### 방법 3 — 국내 VPS + cron
+
+상시 동작이 필요하고 PC 를 켜 두기 어려우면 국내 VPS 에 올린다.
+
+```cron
+0 8 * * 1-5  cd /srv/ppsfinding && ./scripts/run_local.sh collect >> /var/log/ppsfinding.log 2>&1
+```
 
 ### GitHub Actions
 
@@ -295,7 +336,7 @@ python -m g2b_watch.cli collect --days 2
 | 증상 | 원인 / 조치 |
 |---|---|
 | `SERVICE_KEY_IS_NOT_REGISTERED_ERROR` | 활용신청이 아직 승인되지 않았거나 키를 잘못 복사함. 포털 마이페이지에서 승인 상태 확인 |
-| `사용 가능한 스킴이 없습니다` / 80·443 모두 타임아웃 | **호스트에 네트워크로 도달할 수 없다.** GitHub 호스티드 러너(해외 IP)에서 `apis.data.go.kr` 접속이 되지 않는 것으로 확인됐다. 아래 «실행 위치» 참고 |
+| `사용 가능한 스킴이 없습니다` / 80·443 모두 타임아웃 | **해외 IP 차단.** 국내 네트워크에서 실행해야 한다. 5절 «실행 위치» 참고 |
 | `사용 가능한 오퍼레이션을 찾지 못했습니다` | `probe --dump` 실행 후 `config/sources.yaml` 의 variants 수정 |
 | Notion `object_not_found` | 인테그레이션을 대상 DB 에 연결하지 않았음 |
 | Notion `validation_error … is not a property that exists` | DB 속성 이름을 바꿨다. `notion_sink.py` 의 속성명과 맞출 것 |
@@ -325,7 +366,10 @@ src/g2b_watch/
   scoring.py        수주검토 점수
   notion_sink.py    중복 조회 + 페이지 생성
   cli.py            probe / collect
-tests/              네트워크 없이 도는 단위·통합 테스트 48건
+scripts/
+  run_local.sh      국내 PC/서버용 실행 스크립트 (macOS/Linux)
+  run_local.bat     국내 PC 용 실행 스크립트 (Windows, 작업 스케줄러 등록용)
+tests/              네트워크 없이 도는 단위·통합 테스트 52건
 ```
 
 ---

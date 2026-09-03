@@ -7,11 +7,13 @@ import logging
 import os
 import socket
 import sys
+from pathlib import Path
 from urllib.parse import urlparse
 from datetime import datetime, timedelta
 from typing import Any
 
 from .company import load_company, load_rules
+from .config import REPO_ROOT
 from .config import KeywordConfig, Source, load_keywords, load_sources
 from .enrich import Enrichment, fetch_enrichment
 from .g2b_client import ApiPage, G2BClient, G2BError
@@ -22,6 +24,30 @@ from .qualification import evaluate
 from .scoring import score as score_record
 
 log = logging.getLogger("g2b_watch")
+
+
+def load_dotenv(path: Path | None = None) -> list[str]:
+    """저장소 루트의 .env 를 읽어 환경변수로 넣는다(이미 설정된 값은 덮지 않는다).
+
+    로컬·사내 PC 에서 돌릴 때 매번 export 하지 않아도 되게 하기 위한 것.
+    GitHub Actions 에서는 .env 가 없으므로 아무 일도 하지 않는다.
+    """
+    env_path = path or (REPO_ROOT / ".env")
+    if not env_path.exists():
+        return []
+
+    loaded: list[str] = []
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+            loaded.append(key)
+    return loaded
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -275,6 +301,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     _setup_logging(args.verbose)
+    loaded = load_dotenv()
+    if loaded:
+        log.info(".env 에서 %s 를 읽었습니다", ", ".join(loaded))
     try:
         return args.func(args)
     except Exception as exc:  # noqa: BLE001 - CLI 경계에서 한 번만 잡는다

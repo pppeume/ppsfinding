@@ -20,7 +20,9 @@ permissions:
 
 jobs:
   probe:
-    runs-on: ubuntu-latest
+    # 조달청 서버는 해외 IP 를 차단한다. 국내 self-hosted 러너를 붙였다면
+    # 저장소 변수 RUNNER_LABEL 에 그 러너 라벨(예: self-hosted)을 넣으면 이쪽으로 돈다.
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
