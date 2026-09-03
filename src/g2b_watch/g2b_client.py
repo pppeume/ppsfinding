@@ -141,7 +141,7 @@ class G2BClient:
             alt = swap_scheme(primary)
             if alt != primary:
                 urls.append(alt)
-        return [u for u in urls if u.split("://", 1)[0] not in self._dead_schemes] or urls[:1]
+        return [u for u in urls if u.split("://", 1)[0] not in self._dead_schemes]
 
     def _call(self, variant: Variant, params: dict[str, str]) -> ApiPage:
         query = {
@@ -152,7 +152,15 @@ class G2BClient:
 
         last_error: Exception | None = None
         for attempt in range(1, self.api.retries + 1):
-            for url in self._candidate_urls(variant):
+            candidates = self._candidate_urls(variant)
+            if not candidates:
+                # 모든 스킴이 이미 연결 불가로 확인됐다. 더 기다려도 결과가 같으므로 즉시 포기한다.
+                raise G2BError(
+                    f"{variant.path}: 사용 가능한 스킴이 없습니다 "
+                    f"(연결 실패: {', '.join(sorted(self._dead_schemes))}). "
+                    "호스트에 대한 네트워크 접근이 차단되어 있는지 확인하세요."
+                )
+            for url in candidates:
                 scheme = url.split("://", 1)[0]
                 try:
                     resp = self.session.get(url, params=query, timeout=self.api.timeout_sec)

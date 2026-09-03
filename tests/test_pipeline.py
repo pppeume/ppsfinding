@@ -298,3 +298,27 @@ def test_dead_scheme_is_not_retried_within_a_run():
     list(client.fetch(source, *WINDOW))
     assert client._dead_schemes == {"https"}
     assert sum(1 for u in session.calls if u.startswith("https://")) == 1
+
+
+def test_all_schemes_dead_fails_fast_without_further_attempts():
+    """모든 스킴이 연결 불가면 재시도를 반복하지 않고 즉시 포기한다."""
+    source = _source("bid_thng")
+
+    class AllDead:
+        def __init__(self):
+            self.calls = 0
+
+        def get(self, url, params=None, timeout=None):
+            self.calls += 1
+            raise requests.ConnectionError("connect timeout")
+
+    session = AllDead()
+    api = replace(FAST_API, retries=3)
+    client = G2BClient("KEY", api, session=session)
+
+    with pytest.raises(G2BError) as err:
+        list(client.fetch(source, *WINDOW))
+
+    # http, https 각 1회씩만 시도하고 끝나야 한다 (재시도 3회 × 2스킴 = 6회가 아니라)
+    assert session.calls == 2
+    assert "사용 가능한 스킴이 없습니다" in str(err.value)

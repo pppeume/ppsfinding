@@ -25,6 +25,11 @@ log = logging.getLogger("g2b_watch")
 
 
 def _setup_logging(verbose: bool) -> None:
+    # CI 로그에서 print 출력이 logging 뒤로 밀리지 않도록 라인 버퍼링으로 바꾼다
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except AttributeError:  # pragma: no cover - 아주 오래된 파이썬
+        pass
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(message)s",

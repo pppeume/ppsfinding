@@ -210,6 +210,27 @@ company:
 
 ## 5. 실행
 
+### ⚠️ 실행 위치 — GitHub 호스티드 러너에서는 조달청 API 에 닿지 않는다
+
+2026-09-03 진단 결과, GitHub 호스티드 러너에서 `apis.data.go.kr` 의 **80·443 포트 모두 TCP
+연결 타임아웃**이다. 인증·경로 문제가 아니라 네트워크 도달 자체가 안 된다.
+
+```
+네트워크 진단 — apis.data.go.kr
+  http  :80   타임아웃 (방화벽/미개방 가능성)
+  https :443  타임아웃 (방화벽/미개방 가능성)
+```
+
+따라서 수집 워크플로는 **국내 네트워크에서 실행**해야 한다. 선택지:
+
+| 방식 | 비용 | 특징 |
+|---|---|---|
+| GitHub Actions **self-hosted runner** (국내 PC/서버) | 0원 | 워크플로 파일 그대로. `runs-on` 만 교체. PC 가 켜져 있어야 함 |
+| 국내 VPS + cron | 월 수천원~ | 상시 동작. 워크플로 대신 cron 으로 `python -m g2b_watch.cli collect` |
+| 사내 서버 / NAS 스케줄러 | 0원 | 사내 방화벽 정책 확인 필요 |
+
+`probe` 명령이 실행 첫머리에 80/443 도달 여부를 출력하므로, 옮긴 환경에서 먼저 확인하면 된다.
+
 ### GitHub Actions
 
 | 워크플로 | 트리거 | 용도 |
@@ -274,7 +295,7 @@ python -m g2b_watch.cli collect --days 2
 | 증상 | 원인 / 조치 |
 |---|---|
 | `SERVICE_KEY_IS_NOT_REGISTERED_ERROR` | 활용신청이 아직 승인되지 않았거나 키를 잘못 복사함. 포털 마이페이지에서 승인 상태 확인 |
-| `ConnectTimeoutError ... port=443` | 이 서비스는 SSL 을 제공하지 않는다. `config/sources.yaml` 의 `base` 가 `http://` 인지 확인. `probe` 가 80/443 포트 열림 여부를 먼저 출력한다 |
+| `사용 가능한 스킴이 없습니다` / 80·443 모두 타임아웃 | **호스트에 네트워크로 도달할 수 없다.** GitHub 호스티드 러너(해외 IP)에서 `apis.data.go.kr` 접속이 되지 않는 것으로 확인됐다. 아래 «실행 위치» 참고 |
 | `사용 가능한 오퍼레이션을 찾지 못했습니다` | `probe --dump` 실행 후 `config/sources.yaml` 의 variants 수정 |
 | Notion `object_not_found` | 인테그레이션을 대상 DB 에 연결하지 않았음 |
 | Notion `validation_error … is not a property that exists` | DB 속성 이름을 바꿨다. `notion_sink.py` 의 속성명과 맞출 것 |
