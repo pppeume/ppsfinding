@@ -9,11 +9,17 @@
 
 두 오퍼레이션 모두 inqryDiv=1 로 **등록일시 범위 일괄 조회**가 되므로,
 공고 건별로 호출하지 않고 기간 단위로 한 번에 받아 (공고번호, 차수) 로 조인한다.
+
+다만 이 일괄 조회는 우리가 고른 공고가 아니라 **기간 내 전국 공고 전체**를 훑는다.
+키워드 검색보다 결과가 훨씬 많아 입찰공고용 페이지 상한(api.max_pages)으로는 잘린다.
+잘린 표로 판정하면 '조회표에 없음'이 '제한 없음'으로 둔갑하므로
+보조 조회에는 별도의 넉넉한 상한(api.aux_max_pages)을 쓰고,
+그래도 잘리면 *_fetched 를 False 로 남겨 완전하지 않은 결과임을 남긴다.
 """
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, Iterable
 
@@ -71,8 +77,14 @@ def _key(item: dict[str, Any]) -> NoticeKey:
     )
 
 
-def _collect(client: G2BClient, source: Source, begin: datetime, end: datetime) -> list[dict[str, Any]]:
-    return list(client.fetch(source, begin, end))
+def _collect(
+    client: G2BClient, source: Source, begin: datetime, end: datetime
+) -> tuple[list[dict[str, Any]], bool]:
+    """보조 소스를 기간 일괄 조회한다. 두 번째 값은 페이지 상한에 걸려 잘렸는지 여부."""
+    source = replace(source, max_pages=client.api.aux_max_pages)
+    client.truncated.discard(source.id)
+    items = list(client.fetch(source, begin, end))
+    return items, source.id in client.truncated
 
 
 def _add(bucket: dict[NoticeKey, list[str]], key: NoticeKey, value: str) -> None:
@@ -124,21 +136,39 @@ def fetch_enrichment(
 
     if want_regions:
         try:
-            for item in _collect(client, REGION_SOURCE, begin, end):
+            items, truncated = _collect(client, REGION_SOURCE, begin, end)
+            for item in items:
                 _add(result.regions, _key(item), str(item.get("prtcptPsblRgnNm", "") or "").strip())
-            result.region_fetched = True
-            log.info("참가가능지역 %s건 공고분 확보", len(result.regions))
+            result.region_fetched = not truncated
+            if truncated:
+                log.error(
+                    "참가가능지역 조회가 %s건에서 잘렸습니다 — 조회표에 없는 공고가 "
+                    "'지역제한 없음'으로 보일 수 있습니다. config/sources.yaml 의 "
+                    "api.aux_max_pages 를 올리거나 --days 를 줄이세요.",
+                    len(result.regions),
+                )
+            else:
+                log.info("참가가능지역 %s건 공고분 확보", len(result.regions))
         except G2BError as exc:
             log.warning("참가가능지역 조회 실패 — 지역 판정을 보류합니다: %s", exc)
 
     if want_licenses:
         try:
-            for item in _collect(client, LICENSE_SOURCE, begin, end):
+            items, truncated = _collect(client, LICENSE_SOURCE, begin, end)
+            for item in items:
                 key = _key(item)
                 for name in _license_names(item):
                     _add(result.licenses, key, name)
-            result.license_fetched = True
-            log.info("면허제한 %s건 공고분 확보", len(result.licenses))
+            result.license_fetched = not truncated
+            if truncated:
+                log.error(
+                    "면허제한 조회가 %s건에서 잘렸습니다 — 조회표에 없는 공고가 "
+                    "'요구 면허 없음'으로 보일 수 있습니다. config/sources.yaml 의 "
+                    "api.aux_max_pages 를 올리거나 --days 를 줄이세요.",
+                    len(result.licenses),
+                )
+            else:
+                log.info("면허제한 %s건 공고분 확보", len(result.licenses))
         except G2BError as exc:
             log.warning("면허제한 조회 실패 — 면허 판정을 보류합니다: %s", exc)
 

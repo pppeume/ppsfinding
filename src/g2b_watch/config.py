@@ -41,6 +41,8 @@ class Source:
     keyword_param: str
     fixed_params: dict[str, str]
     variants: tuple[Variant, ...]
+    # 이 소스만 다른 페이지 상한을 쓸 때. None 이면 ApiSettings.max_pages 를 따른다.
+    max_pages: int | None = None
 
 
 @dataclass(frozen=True)
@@ -53,6 +55,7 @@ class ApiSettings:
     backoff_sec: float
     num_of_rows: int
     max_pages: int
+    aux_max_pages: int
     sleep_between_calls_sec: float
 
 
@@ -134,6 +137,7 @@ def load_sources(path: str | os.PathLike[str] | None = None) -> SourcesConfig:
         backoff_sec=float(api_raw.get("backoff_sec", 2.0)),
         num_of_rows=int(api_raw.get("num_of_rows", 100)),
         max_pages=int(api_raw.get("max_pages", 20)),
+        aux_max_pages=int(api_raw.get("aux_max_pages", 100)),
         sleep_between_calls_sec=float(api_raw.get("sleep_between_calls_sec", 0.3)),
     )
 

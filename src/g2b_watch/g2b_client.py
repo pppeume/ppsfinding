@@ -126,6 +126,8 @@ class G2BClient:
         # 연결 자체가 안 되는 스킴(예: SSL 미지원 서비스의 https)을 실행 중 기억해 두고
         # 같은 실패를 반복하지 않는다.
         self._dead_schemes: set[str] = set()
+        # 페이지 상한에 걸려 끝까지 받지 못한 소스 id. 판정의 신뢰도를 낮추는 근거가 된다.
+        self.truncated: set[str] = set()
 
     # --- 저수준 호출 ---------------------------------------------------------
 
@@ -249,8 +251,10 @@ class G2BClient:
         if keyword:
             base_params[source.keyword_param] = keyword
 
+        limit = source.max_pages or self.api.max_pages
         seen = 0
-        for page_no in range(1, self.api.max_pages + 1):
+        total = 0
+        for page_no in range(1, limit + 1):
             page = self._call(variant, {**base_params, "pageNo": str(page_no)})
             if not page.ok:
                 raise G2BError(f"[{source.id}] {page.result_code} {page.result_msg}")
@@ -258,12 +262,17 @@ class G2BClient:
                 return
             yield from page.items
             seen += len(page.items)
+            total = page.total_count
             if seen >= page.total_count or len(page.items) < self.api.num_of_rows:
                 return
 
+        # 상한에 걸려 끝까지 못 받았다. 호출부가 '불완전한 결과'임을 알 수 있어야 한다.
+        self.truncated.add(source.id)
         log.warning(
-            "[%s] max_pages(%s) 도달 — 결과가 잘렸을 수 있습니다 (keyword=%s)",
+            "[%s] max_pages(%s) 도달 — %s건 중 %s건만 받았습니다 (keyword=%s)",
             source.id,
-            self.api.max_pages,
+            limit,
+            total or "?",
+            seen,
             keyword,
         )

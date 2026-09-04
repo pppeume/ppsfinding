@@ -181,6 +181,66 @@ def test_fetch_paginates_until_total_count():
     assert len(list(client.fetch(source, *WINDOW))) == 250
 
 
+def test_source_can_override_the_page_ceiling():
+    """보조 조회처럼 결과가 많은 소스는 자체 상한을 쓸 수 있어야 한다."""
+    source = _source("bid_servc")
+    items = [
+        {"bidNtceNo": str(i), "bidNtceOrd": "000", "bidNtceNm": f"공고{i}"} for i in range(1500)
+    ]
+    api = replace(FAST_API, max_pages=3)  # 기본 상한이면 300건에서 잘린다
+
+    session = FakeSession(source.variants[0].path, items)
+    capped = G2BClient("KEY", api, session=session)
+    assert len(list(capped.fetch(source, *WINDOW))) == 300
+    assert source.id in capped.truncated
+
+    session = FakeSession(source.variants[0].path, items)
+    lifted = G2BClient("KEY", api, session=session)
+    assert len(list(lifted.fetch(replace(source, max_pages=20), *WINDOW))) == 1500
+    assert lifted.truncated == set()
+
+
+# --- 보조 조회(참가가능지역·면허제한) -------------------------------------------
+
+
+def _aux_client(items, *, max_pages):
+    """보조 오퍼레이션 두 개 중 지역 쪽만 살아 있는 클라이언트."""
+    from g2b_watch.enrich import REGION_SOURCE
+
+    session = FakeSession(REGION_SOURCE.variants[0].path, items)
+    api = replace(FAST_API, aux_max_pages=max_pages)
+    return G2BClient("KEY", api, session=session)
+
+
+def test_enrichment_joins_region_rows_by_notice_key():
+    from g2b_watch.enrich import fetch_enrichment
+
+    items = [
+        {"bidNtceNo": "A1", "bidNtceOrd": "000", "prtcptPsblRgnNm": "부산광역시"},
+        {"bidNtceNo": "A1", "bidNtceOrd": "000", "prtcptPsblRgnNm": "울산광역시"},
+    ]
+    client = _aux_client(items, max_pages=100)
+    enr = fetch_enrichment(client, *WINDOW, want_licenses=False)
+
+    assert enr.allowed_regions(("A1", "000")) == ("부산광역시", "울산광역시")
+    assert enr.region_fetched is True
+
+
+def test_truncated_aux_sweep_is_not_reported_as_complete():
+    """상한에 걸려 잘린 조회표를 '제한 없음'으로 읽으면 판정이 틀린다."""
+    from g2b_watch.enrich import fetch_enrichment
+
+    items = [
+        {"bidNtceNo": str(i), "bidNtceOrd": "000", "prtcptPsblRgnNm": "부산광역시"}
+        for i in range(500)
+    ]
+    client = _aux_client(items, max_pages=2)  # 100건씩 2페이지 = 200건에서 잘린다
+    enr = fetch_enrichment(client, *WINDOW, want_licenses=False)
+
+    assert len(enr.regions) == 200
+    assert enr.region_fetched is False, "잘린 결과를 완전한 것으로 표시하면 안 된다"
+
+
 # --- end-to-end ----------------------------------------------------------------
 
 
@@ -322,3 +382,37 @@ def test_all_schemes_dead_fails_fast_without_further_attempts():
     # http, https 각 1회씩만 시도하고 끝나야 한다 (재시도 3회 × 2스킴 = 6회가 아니라)
     assert session.calls == 2
     assert "사용 가능한 스킴이 없습니다" in str(err.value)
+
+
+# --- 결과 JSON 저장 -------------------------------------------------------------
+
+
+def _sample_record():
+    return to_record(
+        {"bidNtceNo": "A1", "bidNtceOrd": "000", "bidNtceNm": "본관 BEMS 구축 용역"},
+        source_id="bid_servc",
+        kind="bid",
+        label="용역",
+    )
+
+
+def test_json_out_creates_missing_directories(tmp_path):
+    """워크플로가 넘기는 out/result.json 처럼 없는 디렉터리도 만들어야 한다."""
+    from g2b_watch.cli import dump_json
+
+    target = tmp_path / "out" / "result.json"
+    assert dump_json(target, [_sample_record()]) is True
+
+    saved = json.loads(target.read_text(encoding="utf-8"))
+    assert saved[0]["title"] == "본관 BEMS 구축 용역"
+    assert "raw" not in saved[0]
+
+
+def test_json_out_failure_does_not_abort_the_run(tmp_path):
+    """진단 파일을 못 써도 수집 결과 적재까지 막아서는 안 된다."""
+    from g2b_watch.cli import dump_json
+
+    blocker = tmp_path / "out"
+    blocker.write_text("디렉터리 자리를 파일이 차지하고 있다", encoding="utf-8")
+
+    assert dump_json(blocker / "result.json", [_sample_record()]) is False

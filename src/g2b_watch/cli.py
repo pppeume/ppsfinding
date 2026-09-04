@@ -50,6 +50,27 @@ def load_dotenv(path: Path | None = None) -> list[str]:
     return loaded
 
 
+def dump_json(path: str | Path, records: list[Record]) -> bool:
+    """결과를 JSON 파일로 남긴다. 실패해도 예외를 올리지 않고 False 를 준다.
+
+    `--json-out out/result.json` 처럼 아직 없는 디렉터리를 가리킬 수 있으므로 먼저 만든다.
+    이건 진단용 산출물이라, 여기서 넘어진다고 이미 수집·판정을 마친 결과를
+    Notion 에 못 올리는 일이 있어서는 안 된다.
+    """
+    out_path = Path(path)
+    payload = [{k: v for k, v in vars(rec).items() if k != "raw"} for rec in records]
+    try:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except OSError as exc:
+        log.error("JSON 저장 실패(수집 결과는 그대로 적재합니다): %s", exc)
+        return False
+    log.info("JSON 저장: %s", out_path)
+    return True
+
+
 def _setup_logging(verbose: bool) -> None:
     # CI 로그에서 print 출력이 logging 뒤로 밀리지 않도록 라인 버퍼링으로 바꾼다
     try:
@@ -227,7 +248,16 @@ def cmd_collect(args: argparse.Namespace) -> int:
     print(f"\n원시 {stats['fetched']}건 → 파싱 {stats['parsed']}건 → 키워드 매칭 {stats['matched']}건 → 적재대상 {len(ordered)}건")
     print("  판정: " + " / ".join(f"{k} {v}건" for k, v in by_verdict.items()) if by_verdict else "  판정: 없음")
     print(f"  영업 우선검토({rules.review_threshold}점 이상): "
-          f"{sum(1 for r in ordered if r.opportunity_score >= rules.review_threshold)}건\n")
+          f"{sum(1 for r in ordered if r.opportunity_score >= rules.review_threshold)}건")
+    incomplete = [
+        label
+        for label, ok in (("참가가능지역", enrichment.region_fetched),
+                          ("면허제한", enrichment.license_fetched))
+        if not ok
+    ]
+    if incomplete and records and not args.no_enrich:
+        print(f"  ⚠ 보조정보 불완전({', '.join(incomplete)}) — 해당 제한 판정은 신뢰하지 마세요")
+    print()
     for rec in ordered:
         price = f"{rec.price:,}원" if rec.price else "-"
         codes = ",".join(rec.restriction_codes) or "-"
@@ -237,12 +267,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
         )
 
     if args.json_out:
-        payload = [
-            {k: v for k, v in vars(rec).items() if k != "raw"} for rec in ordered
-        ]
-        with open(args.json_out, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, ensure_ascii=False, indent=2)
-        log.info("JSON 저장: %s", args.json_out)
+        dump_json(args.json_out, ordered)
 
     if args.no_notion:
         log.info("--no-notion 지정 — Notion 적재를 건너뜁니다")
