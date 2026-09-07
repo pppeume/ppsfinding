@@ -416,3 +416,45 @@ def test_json_out_failure_does_not_abort_the_run(tmp_path):
     blocker.write_text("디렉터리 자리를 파일이 차지하고 있다", encoding="utf-8")
 
     assert dump_json(blocker / "result.json", [_sample_record()]) is False
+
+
+# --- 전부 실패한 수집을 성공으로 넘기지 않는다 ---------------------------------
+
+
+def _dead_client():
+    """모든 요청이 오류 envelope 를 주는 클라이언트(서버에 닿지 못하는 상황)."""
+    session = FakeSession("존재하지않는오퍼레이션", [])
+    return G2BClient("KEY", replace(FAST_API, retries=1), session=session)
+
+
+def test_all_keyword_queries_failing_is_not_an_empty_result():
+    """조회가 전부 실패한 실행이 '신규 0건 · 성공'으로 끝나면 안 된다.
+
+    2026-09-07 스케줄 실행에서 실제로 그렇게 끝났다. 모든 키워드가
+    '사용 가능한 스킴이 없습니다' 로 실패했는데 종료코드는 0 이었다.
+    """
+    from g2b_watch.cli import _collect_raw
+
+    source = _source("bid_servc")
+    fetched = _collect_raw(_dead_client(), source, KEYWORDS, *WINDOW, "keyword")
+
+    assert fetched.items == []
+    assert fetched.attempted > 0
+    assert fetched.failed == fetched.attempted
+    assert fetched.all_failed is True
+    assert fetched.partly_failed is False
+
+
+def test_successful_fetch_is_not_flagged_as_failed():
+    from g2b_watch.cli import _collect_raw
+
+    source = _source("bid_servc")
+    items = [{"bidNtceNo": "A1", "bidNtceOrd": "000", "bidNtceNm": "본관 BEMS 구축 용역"}]
+    session = FakeSession(source.variants[0].path, items)
+    client = G2BClient("KEY", FAST_API, session=session)
+
+    fetched = _collect_raw(client, source, KEYWORDS, *WINDOW, "keyword")
+
+    assert fetched.all_failed is False
+    assert fetched.partly_failed is False
+    assert fetched.items, "키워드 검색이 성공했으면 결과가 있어야 한다"

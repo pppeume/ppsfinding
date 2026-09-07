@@ -9,6 +9,7 @@ import socket
 import sys
 from pathlib import Path
 from urllib.parse import urlparse
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -143,26 +144,50 @@ def cmd_probe(args: argparse.Namespace) -> int:
 # --- collect -----------------------------------------------------------------
 
 
+@dataclass
+class SourceFetch:
+    """소스 하나의 수집 결과. '0건'과 '전부 실패'를 구분하기 위한 것.
+
+    키워드 조회는 하나쯤 실패해도 나머지로 진행하는 게 맞지만, **전부** 실패한 것을
+    빈 결과로 넘기면 서버에 닿지도 못한 실행이 '신규 0건 · 성공'으로 끝난다.
+    실제로 그런 실행이 있었다(2026-09-07 스케줄). 그래서 시도/실패 수를 남긴다.
+    """
+
+    items: list[dict[str, Any]]
+    attempted: int = 0
+    failed: int = 0
+
+    @property
+    def all_failed(self) -> bool:
+        return self.attempted > 0 and self.failed == self.attempted
+
+    @property
+    def partly_failed(self) -> bool:
+        return 0 < self.failed < self.attempted
+
+
 def _collect_raw(
     client: G2BClient, source: Source, keywords: KeywordConfig, begin, end, mode: str
-) -> list[dict[str, Any]]:
+) -> SourceFetch:
     """소스 하나에서 원시 아이템을 모은다(키워드별 호출 또는 전체 스캔)."""
-    collected: list[dict[str, Any]] = []
     if mode == "full":
-        collected.extend(client.fetch(source, begin, end))
-        log.info("[%s] 전체 스캔 %s건", source.id, len(collected))
-        return collected
+        items = list(client.fetch(source, begin, end))
+        log.info("[%s] 전체 스캔 %s건", source.id, len(items))
+        return SourceFetch(items=items, attempted=1)
 
+    result = SourceFetch(items=[])
     for term in keywords.all_search_terms():
+        result.attempted += 1
         try:
             items = list(client.fetch(source, begin, end, keyword=term))
         except G2BError as exc:
+            result.failed += 1
             log.error("[%s] 키워드 '%s' 조회 실패: %s", source.id, term, exc)
             continue
         if items:
             log.info("[%s] '%s' → %s건", source.id, term, len(items))
-        collected.extend(items)
-    return collected
+        result.items.extend(items)
+    return result
 
 
 def cmd_collect(args: argparse.Namespace) -> int:
@@ -187,12 +212,31 @@ def cmd_collect(args: argparse.Namespace) -> int:
 
     for source in sources_cfg.enabled_sources():
         try:
-            raw_items = _collect_raw(client, source, keywords, begin, end, args.mode)
+            fetched = _collect_raw(client, source, keywords, begin, end, args.mode)
         except G2BError as exc:
             log.error("[%s] 수집 실패 — 이 소스는 건너뜁니다\n%s", source.id, exc)
             failed_sources.append(source.id)
             continue
 
+        if fetched.all_failed:
+            # 조회를 하나도 성공하지 못했다. 이걸 '0건'으로 넘기면 서버에 닿지 못한
+            # 실행이 성공으로 끝난다. 실패로 기록해 종료코드에 반영한다.
+            log.error(
+                "[%s] 조회 %s건이 모두 실패했습니다 — 서버에 닿지 못했습니다",
+                source.id,
+                fetched.attempted,
+            )
+            failed_sources.append(source.id)
+            continue
+        if fetched.partly_failed:
+            log.warning(
+                "[%s] 조회 %s건 중 %s건 실패 — 결과가 일부 빠졌을 수 있습니다",
+                source.id,
+                fetched.attempted,
+                fetched.failed,
+            )
+
+        raw_items = fetched.items
         stats["fetched"] += len(raw_items)
         for item in raw_items:
             rec = to_record(item, source_id=source.id, kind=source.kind, label=source.label)
@@ -245,6 +289,8 @@ def cmd_collect(args: argparse.Namespace) -> int:
     for rec in ordered:
         by_verdict[rec.verdict] = by_verdict.get(rec.verdict, 0) + 1
 
+    if failed_sources:
+        print(f"\n❌ 수집 실패 소스: {', '.join(failed_sources)} — 아래 숫자는 나머지 소스만의 결과입니다")
     print(f"\n원시 {stats['fetched']}건 → 파싱 {stats['parsed']}건 → 키워드 매칭 {stats['matched']}건 → 적재대상 {len(ordered)}건")
     print("  판정: " + " / ".join(f"{k} {v}건" for k, v in by_verdict.items()) if by_verdict else "  판정: 없음")
     print(f"  영업 우선검토({rules.review_threshold}점 이상): "
