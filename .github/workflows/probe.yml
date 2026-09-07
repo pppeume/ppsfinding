@@ -1,0 +1,102 @@
+name: API 엔드포인트 진단
+
+# config/sources.yaml 의 오퍼레이션 후보 중 어떤 조합이 실제로 응답하는지 확인한다.
+# 최초 세팅 시, 그리고 조달청이 API 버전을 올려 수집이 깨졌을 때 실행한다.
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "진단에 쓸 조회 기간(일)"
+        required: false
+        default: "1"
+      dump:
+        description: "정상 응답의 필드 키 목록까지 출력"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    # 조달청 서버는 해외 IP 를 차단한다. 국내 self-hosted 러너를 붙였다면
+    # 저장소 변수 RUNNER_LABEL 에 그 러너 라벨(예: self-hosted)을 넣으면 이쪽으로 돈다.
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 의존성 설치
+        run: pip install -r requirements.txt
+
+      # 파이썬이 붙기 전에 OS 레벨에서 무엇이 막혔는지 먼저 가른다.
+      # DNS / IPv4 / IPv6 / 다른 국내 호스트를 각각 찍어 원인을 좁힌다.
+      - name: 네트워크 도달 진단 (shell)
+        continue-on-error: true
+        env:
+          G2B_SERVICE_KEY: ${{ secrets.G2B_SERVICE_KEY }}
+        run: |
+          set +e
+          H=apis.data.go.kr
+          OP=/1230000/ad/BidPublicInfoService/getBidPblancListInfoThngPPSSrch
+
+          echo "===== 1. DNS 해석 ====="
+          getent ahosts "$H" || echo "(getent 실패)"
+
+          echo
+          echo "===== 2. TCP 포트 (nc) ====="
+          for P in 80 443; do
+            timeout 12 bash -c "cat < /dev/null > /dev/tcp/$H/$P" 2>/dev/null \
+              && echo "  :$P 열림" || echo "  :$P 닫힘/타임아웃"
+          done
+
+          echo
+          echo "===== 3. IPv4 강제 호출 ====="
+          curl -4 -sS -G --max-time 25 \
+            --data-urlencode "ServiceKey=$G2B_SERVICE_KEY" \
+            --data-urlencode "type=json" \
+            --data-urlencode "numOfRows=1" \
+            --data-urlencode "pageNo=1" \
+            --data-urlencode "inqryDiv=1" \
+            --data-urlencode "inqryBgnDt=202609020000" \
+            --data-urlencode "inqryEndDt=202609022359" \
+            -o /tmp/v4.txt \
+            -w "  http_code=%{http_code} connect=%{time_connect}s total=%{time_total}s ip=%{remote_ip}\n" \
+            "http://$H$OP"
+          echo "  curl exit=$?"
+          echo "  --- 응답 앞부분 ---"
+          head -c 600 /tmp/v4.txt 2>/dev/null; echo
+
+          echo
+          echo "===== 4. IPv6 강제 호출 ====="
+          curl -6 -sS --max-time 15 -o /dev/null \
+            -w "  http_code=%{http_code} ip=%{remote_ip}\n" "http://$H$OP"
+          echo "  curl exit=$?"
+
+          echo
+          echo "===== 5. 다른 국내 호스트 (차단 범위 확인) ====="
+          for U in https://www.data.go.kr https://www.g2b.go.kr https://www.naver.com; do
+            curl -4 -sS -o /dev/null --max-time 15 \
+              -w "  $U  code=%{http_code} connect=%{time_connect}s ip=%{remote_ip}\n" "$U" \
+              || echo "  $U  실패(exit=$?)"
+          done
+
+          echo
+          echo "===== 6. 러너 위치 ====="
+          curl -4 -sS --max-time 10 https://ipinfo.io/json 2>/dev/null | head -c 300; echo
+          exit 0
+
+      - name: 엔드포인트 후보 진단
+        env:
+          G2B_SERVICE_KEY: ${{ secrets.G2B_SERVICE_KEY }}
+          PYTHONPATH: src
+        run: |
+          python -m g2b_watch.cli probe \
+            --days "${{ inputs.days || '1' }}" \
+            ${{ inputs.dump == true && '--dump' || '' }}

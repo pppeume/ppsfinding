@@ -1,0 +1,77 @@
+# 조달청(나라장터) OpenAPI 소스 정의
+#
+# 근거: 「조달청 공공데이터 개방 OpenAPI 참고자료 v1.2」(2026.04.10) 원문
+#   - 서비스 ID   : BidPublicInfoService (나라장터 입찰공고정보서비스, 서비스 버전 3.1)
+#   - 운영 엔드포인트: apis.data.go.kr/1230000/ad/BidPublicInfoService
+#   - 인증        : ServiceKey (쿼리 파라미터, 대문자 S)
+#   - 응답 포맷   : XML / JSON (type=json)
+#   - 전송 암호화 : 명세서상 "SSL 없음". 운영 엔드포인트가 http 로 표기되어 있고
+#                   443 포트는 연결 타임아웃이 난다. 그래서 base 는 http 다.
+#                   혹시 나중에 https 가 열리면 client 가 자동으로 시도한다(scheme_fallback).
+#   - 처리 한도   : 30 tps, 평균 응답 500ms
+#
+# 오퍼레이션 선택 근거
+#   문서상 업무구분별로 두 계열이 있다.
+#     (a) getBidPblancListInfo{Thng,Servc}        — inqryDiv 1:등록일시/2:공고번호/3:변경일시 만 지원
+#     (b) getBidPblancListInfo{Thng,Servc}PPSSrch — 위에 더해 bidNtceNm(공고명 부분일치),
+#                                                   기관명, 추정가격 범위, 참가제한지역 등 검색조건 지원
+#   키워드 모니터링이 목적이므로 (b) PPSSrch 계열을 사용한다.
+
+api:
+  base: "http://apis.data.go.kr/1230000/ad/BidPublicInfoService"
+  # 연결 실패 시 반대 스킴(http<->https)으로 한 번 더 시도한다
+  scheme_fallback: true
+  # 문서 표기는 ServiceKey(대문자 S). 소문자로 보내면 서비스에 따라 인증 실패할 수 있다.
+  service_key_param: "ServiceKey"
+  timeout_sec: 30
+  retries: 3
+  backoff_sec: 2.0
+  num_of_rows: 100
+  max_pages: 20
+  # 보조 오퍼레이션(참가가능지역·면허제한)은 키워드로 못 좁히고 기간 내 전국 공고를
+  # 통째로 훑는다. 결과량이 자릿수가 달라 입찰공고와 같은 상한을 쓰면 잘린다.
+  aux_max_pages: 100
+  # 문서상 초당 최대 30 트랜잭션. 여유를 둬 호출 간격을 잡는다.
+  sleep_between_calls_sec: 0.3
+
+defaults:
+  keyword_param: bidNtceNm
+  date_params:
+    begin: inqryBgnDt
+    end: inqryEndDt
+    fmt: "%Y%m%d%H%M"   # 문서 샘플: 202507010000
+
+sources:
+  - id: bid_thng
+    label: "물품"
+    kind: bid
+    enabled: true
+    fixed_params:
+      inqryDiv: "1"        # PPSSrch 계열에서 1 = 공고게시일시 기준
+    variants:
+      - path: "getBidPblancListInfoThngPPSSrch"
+
+  - id: bid_servc
+    label: "용역"
+    kind: bid
+    enabled: true
+    fixed_params:
+      inqryDiv: "1"
+    variants:
+      - path: "getBidPblancListInfoServcPPSSrch"
+
+  # 사전규격(발주예고)은 이 서비스에 포함되지 않는다.
+  # 제공받은 문서(BidPublicInfoService)의 오퍼레이션 25종 어디에도 사전규격 목록 조회가 없고,
+  # 「조달청_나라장터 사전규격정보서비스」라는 별도 서비스로 분리되어 있다.
+  # 그 서비스의 활용신청 + 명세서를 받으면 path/파라미터를 채우고 enabled: true 로 바꾼다.
+  # (입찰공고 응답에 사전규격등록번호 bfSpecRgstNo 가 들어 있어 나중에 연결은 가능하다.)
+  - id: prestd
+    label: "사전규격"
+    kind: prestd
+    enabled: false
+    keyword_param: prdctClsfcNoNm
+    fixed_params:
+      inqryDiv: "1"
+    variants:
+      - path: "MISSING__사전규격정보서비스_명세_필요"
+        date_params: {begin: inqryBgnDate, end: inqryEndDate, fmt: "%Y%m%d"}
