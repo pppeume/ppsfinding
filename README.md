@@ -359,7 +359,7 @@ python -m g2b_watch.cli collect --days 2
 | `--dedup-days` | 14 | 중복 판정에 볼 Notion 최근 적재 범위 |
 | `--min-score` | — | YAML 값을 임시로 덮어씀 (튜닝용) |
 | `--limit` | — | 관련도 높은 순 상위 N건만 적재 |
-| `--dry-run` | off | Notion 조회는 건너뛰고 쓰기만 생략 |
+| `--dry-run` | off | Notion 을 아예 건드리지 않는다 — 쓰기는 물론 **중복 조회도 하지 않는다.** 그래서 요약의 «신규 N건» 은 중복을 뺀 수가 아니라 조회창 안에서 매칭된 전체 건수다 |
 | `--no-notion` | off | Notion 단계를 아예 건너뜀 |
 | `--json-out` | — | 결과를 JSON 파일로도 저장 |
 
