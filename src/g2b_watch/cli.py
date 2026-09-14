@@ -90,6 +90,34 @@ def _window(days: int) -> tuple[datetime, datetime]:
     return end - timedelta(days=days), end
 
 
+# 정기 수집 스케줄은 월~금(KST) 아침에만 돈다(.github/workflows/collect.yml, cron "0 23 * * 0-4").
+# 조회창이 늘 2일이면 금요일 아침 이후 게시된 공고는 **어느 실행에도 잡히지 않는다.**
+#   금요일 실행 → [수 08:00, 금 08:00]
+#   월요일 실행 → [토 08:00, 월 08:00]   ← 금 08:00~토 08:00 이 비어 있다
+# 금요일 업무시간에 올라온 공고가 매주 통째로 빠지는 구멍이라, 월요일만 창을 넓혀 덮는다.
+DEFAULT_LOOKBACK_DAYS = 2
+# 3일이 아니라 4일인 이유: GitHub 스케줄은 40~110분씩 늦게 발화해 창의 양끝이 흔들린다.
+# 3일이면 경계가 금요일 실행의 시작점에 딱 붙어, 지연 조합에 따라 다시 틈이 생긴다.
+MONDAY_LOOKBACK_DAYS = 4
+
+
+def lookback_days(now: datetime | None = None) -> int:
+    """정기 수집이 볼 조회 기간(일). 월요일(KST)만 넓힌다.
+
+    겹치는 구간은 Notion 의 공고번호로 중복 제거되므로 재적재되지 않는다.
+    늘어난 이틀이 토·일이라 실제 공고량은 평일 2일 창과 비슷하고, 보조 조회
+    (전국 공고 일괄 스캔)의 페이지 상한에도 여유가 그대로 남는다.
+    """
+    now = now or datetime.now(KST)
+    return MONDAY_LOOKBACK_DAYS if now.weekday() == 0 else DEFAULT_LOOKBACK_DAYS
+
+
+def cmd_lookback_days(args: argparse.Namespace) -> int:
+    """워크플로가 --days 에 넣을 값을 계산해 준다."""
+    print(lookback_days())
+    return 0
+
+
 # --- probe -------------------------------------------------------------------
 
 
@@ -348,8 +376,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_probe.add_argument("--dump", action="store_true", help="정상 응답의 필드 키 목록을 출력")
     p_probe.set_defaults(func=cmd_probe)
 
+    p_days = sub.add_parser("lookback-days",
+                            help="정기 수집이 쓸 조회 기간(일)을 출력한다(월요일은 주말 공백을 덮어 넓다)")
+    p_days.set_defaults(func=cmd_lookback_days)
+
     p_collect = sub.add_parser("collect", help="수집 → 필터 → Notion 적재")
-    p_collect.add_argument("--days", type=int, default=2, help="조회 기간(일). 실행 누락 대비 중첩 권장")
+    p_collect.add_argument("--days", type=int, default=DEFAULT_LOOKBACK_DAYS,
+                           help="조회 기간(일). 실행 누락 대비 중첩 권장")
     p_collect.add_argument("--mode", choices=["keyword", "full"], default="keyword",
                            help="keyword: 검색어별 호출 / full: 기간 전체 스캔 후 로컬 필터")
     p_collect.add_argument("--dedup-days", type=int, default=14, help="중복 판정에 볼 Notion 최근 적재 기간")

@@ -32,8 +32,9 @@ permissions:
 
 jobs:
   collect:
-    # 조달청 서버는 해외 IP 를 차단한다. 국내 self-hosted 러너를 붙였다면
-    # 저장소 변수 RUNNER_LABEL 에 그 러너 라벨(예: self-hosted)을 넣으면 이쪽으로 돈다.
+    # 대부분의 GitHub 호스티드 러너에서 조달청 API 에 정상 도달한다. 다만 러너에 따라
+    # 연결이 안 되는 날이 관측됐다(README 5절의 실측 기록). 국내 self-hosted 러너를
+    # 붙였다면 저장소 변수 RUNNER_LABEL 에 그 라벨(예: self-hosted)을 넣으면 이쪽으로 돈다.
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 30
     steps:
@@ -76,6 +77,19 @@ jobs:
             exit 1
           fi
 
+      # 스케줄은 월~금(KST)만 돈다. 조회창이 늘 2일이면 금요일 08:00 이후 게시된 공고가
+      # 어느 실행에도 잡히지 않는다 — 근거와 월요일만 창을 넓히는 이유는 cli.lookback_days
+      # 의 주석에 적어 뒀고, 빈 구간이 생기지 않는지는 테스트로 지킨다.
+      - name: 조회 기간 결정
+        id: window
+        env:
+          PYTHONPATH: src
+        run: |
+          days="${{ inputs.days }}"
+          [ -n "$days" ] || days="$(python -m g2b_watch.cli lookback-days)"
+          echo "days=$days" >> "$GITHUB_OUTPUT"
+          echo "조회 기간: 최근 ${days}일 (KST $(TZ=Asia/Seoul date '+%Y-%m-%d %a %H:%M'))" >> "$GITHUB_STEP_SUMMARY"
+
       - name: 수집 및 Notion 적재
         if: steps.preflight.outputs.ready == 'true'
         env:
@@ -85,7 +99,7 @@ jobs:
           PYTHONPATH: src
         run: |
           python -m g2b_watch.cli collect \
-            --days "${{ inputs.days || '2' }}" \
+            --days "${{ steps.window.outputs.days }}" \
             --mode "${{ inputs.mode || 'keyword' }}" \
             --json-out out/result.json \
             ${{ inputs.dry_run == true && '--dry-run' || '' }}

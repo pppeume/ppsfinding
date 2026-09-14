@@ -2,7 +2,7 @@
 import json
 import sys
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -10,10 +10,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import pytest
 import requests
 
+from g2b_watch.cli import (
+    DEFAULT_LOOKBACK_DAYS,
+    MONDAY_LOOKBACK_DAYS,
+    lookback_days,
+)
 from g2b_watch.config import DateParams, Source, Variant, load_keywords, load_sources
 from g2b_watch.g2b_client import G2BClient, G2BError, normalize_service_key
 from g2b_watch.matcher import match
-from g2b_watch.normalize import to_record
+from g2b_watch.normalize import KST, to_record
 
 SOURCES = load_sources()
 KEYWORDS = load_keywords()
@@ -458,3 +463,99 @@ def test_successful_fetch_is_not_flagged_as_failed():
     assert fetched.all_failed is False
     assert fetched.partly_failed is False
     assert fetched.items, "키워드 검색이 성공했으면 결과가 있어야 한다"
+
+
+# --- 정기 수집 조회창이 달력에 구멍을 남기지 않는지 -----------------------------
+#
+# 실제로 있었던 문제: 스케줄은 월~금(KST)만 도는데 조회창은 늘 2일이라
+# 금요일 아침 이후 게시된 공고가 어느 실행에도 잡히지 않았다. 워크플로의 cron 을
+# 직접 읽어 검증하므로, 스케줄이나 조회 기간 중 하나만 바뀌어도 여기서 걸린다.
+
+WORKFLOW = Path(__file__).resolve().parents[1] / ".github/workflows/collect.yml"
+
+# GitHub 스케줄은 정시에 발화하지 않는다. 이 저장소에서 실측된 지연은 31~110분이었다.
+# 여유를 둬 0~120분 사이 어디서든 성립해야 한다고 본다.
+MAX_SCHEDULE_DELAY = timedelta(minutes=120)
+
+
+def _cron_firings(weeks: int = 3) -> list[datetime]:
+    """collect.yml 의 cron 표현식대로 UTC 발화 시각을 만든다."""
+    import yaml
+
+    spec = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    # YAML 은 따옴표 없는 on 을 불리언 True 로 읽는다.
+    triggers = spec.get("on", spec.get(True))
+    crons = [entry["cron"] for entry in triggers["schedule"]]
+    assert len(crons) == 1, f"cron 이 여럿이면 이 테스트를 고쳐야 한다: {crons}"
+    minute, hour, dom, month, dow = crons[0].split()
+    assert dom == "*" and month == "*", f"날짜 지정 cron 은 지원하지 않는다: {crons[0]}"
+
+    wanted = set()
+    for part in dow.split(","):
+        if "-" in part:
+            lo, hi = (int(x) for x in part.split("-"))
+            wanted.update(range(lo, hi + 1))
+        else:
+            wanted.add(int(part))
+    # cron 의 요일은 0=일요일, datetime.weekday() 는 0=월요일
+    wanted_py = {(d - 1) % 7 for d in wanted}
+
+    start = datetime(2026, 1, 4, tzinfo=timezone.utc)  # 일요일
+    return [
+        moment
+        for offset in range(weeks * 7)
+        for moment in [
+            (start + timedelta(days=offset)).replace(hour=int(hour), minute=int(minute))
+        ]
+        if moment.weekday() in wanted_py
+    ]
+
+
+def test_monday_looks_back_further_than_the_other_weekdays():
+    monday = datetime(2026, 9, 14, 8, 0, tzinfo=KST)
+    assert monday.weekday() == 0
+    assert lookback_days(monday) == MONDAY_LOOKBACK_DAYS
+    for offset in range(1, 7):
+        other = monday + timedelta(days=offset)
+        assert lookback_days(other) == DEFAULT_LOOKBACK_DAYS, other.strftime("%a")
+
+
+def test_scheduled_windows_cover_every_hour_including_friday():
+    """연속한 두 실행의 조회창이 반드시 겹쳐야 한다 — 최악의 지연 조합에서도."""
+    firings = _cron_firings()
+    assert firings, "cron 을 못 읽었다"
+
+    previous = None
+    for firing in firings:
+        # 최악의 조합: 직전 실행은 지연 없이(창이 가장 일찍 끝남), 이번 실행은
+        # 최대로 늦게 발화(창이 가장 늦게 시작함).
+        latest = (firing + MAX_SCHEDULE_DELAY).astimezone(KST)
+        begin = latest - timedelta(days=lookback_days(latest))
+        if previous is not None:
+            earliest_previous_end = previous.astimezone(KST)
+            assert begin <= earliest_previous_end, (
+                f"{latest:%a %m-%d %H:%M} 실행의 조회창이 {begin:%a %m-%d %H:%M} 부터라 "
+                f"직전 실행이 끝난 {earliest_previous_end:%a %m-%d %H:%M} 이후에 게시된 "
+                "공고가 어느 실행에도 잡히지 않는다"
+            )
+        previous = firing
+
+
+def test_a_flat_two_day_window_would_miss_friday():
+    """구멍을 실제로 잡아내는 테스트인지 확인한다(고정 2일이면 실패해야 한다)."""
+    firings = _cron_firings(weeks=2)
+    uncovered = []
+    previous = None
+    for firing in firings:
+        latest = (firing + MAX_SCHEDULE_DELAY).astimezone(KST)
+        begin = latest - timedelta(days=DEFAULT_LOOKBACK_DAYS)
+        if previous is not None:
+            previous_end = previous.astimezone(KST)
+            if begin > previous_end:
+                uncovered.append(previous_end)  # 이 시점부터 다음 창까지가 빈다
+        previous = firing
+    assert uncovered, "조회 기간을 고정하면 금요일 구멍이 생겨야 정상이다"
+    # 빠지는 구간은 늘 금요일 아침 실행이 끝난 직후부터 시작한다
+    assert all(start.weekday() == 4 for start in uncovered), [
+        s.strftime("%a %H:%M") for s in uncovered
+    ]
