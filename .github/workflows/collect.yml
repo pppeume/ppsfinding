@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       days:
-        description: "조회 기간(일)"
+        description: "조회 기간(일). 비우면 자동 계산 — 평일 2일, 월요일만 4일"
         required: false
-        default: "2"
+        default: ""
       mode:
         description: "keyword(검색어별 호출) 또는 full(기간 전체 스캔)"
         required: false
