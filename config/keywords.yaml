@@ -1,0 +1,154 @@
+# 키워드 사전
+#
+# 3단 필터
+#   1) search_terms  : API 의 bidNtceNm(공고명 부분일치) 로 실제 조회할 검색어 — 서버 측 1차
+#   2) terms         : 수집된 공고명·수요기관에 대해 로컬 재판정 + 점수화 — 2차
+#   3) combos        : 단어 하나로는 안 잡히는 사업을 의미 조합으로 잡는다 — 3차
+#
+# 3)이 필요한 이유:
+#   "○○연구원 전기·기계·소방·승강기 운영관리 위탁용역" 에는 FM 이라는 단어가 없지만
+#   전형적인 시설관리(FM) 사업이다. 설비 종류 × 관리 행위의 조합으로 잡는다.
+#
+# 점수 규칙
+#   - terms/combos 의 각 항목은 최초 1회만 가산
+#   - 축(axis) 점수 = 그 축에서 매칭된 weight 합
+#   - 공고 총점 = 매칭된 모든 축 점수의 합
+#   - 총점이 min_score 미만이면 적재하지 않음
+
+min_score: 3
+min_axes: 1
+
+# 전역 제외어: 하나라도 걸리면 공고 자체를 버린다
+exclude_global:
+  - 조류인플루엔자
+  - 고병원성
+  - 살처분
+  - 구제역
+  - 급식
+  - 청소용역
+  - 경비용역
+  - 제초
+  - 방역소독
+  - 미세먼지측정망
+
+axes:
+  - id: FM용역
+    search_terms: [시설관리, 시설물관리, 종합관리용역, 건물관리, 유지관리]
+    terms:
+      - {pattern: '시설종합관리', weight: 5}
+      - {pattern: '종합시설관리', weight: 5}
+      - {pattern: '시설물유지관리', weight: 5}
+      - {pattern: '시설관리', weight: 4}
+      - {pattern: '시설물관리', weight: 4}
+      - {pattern: '종합관리용역', weight: 4}
+      - {pattern: '건물관리', weight: 3}
+      - {pattern: '시설운영', weight: 3}
+      - {pattern: '유지관리', weight: 2}
+      - {pattern: '유지보수', weight: 2}
+      - {pattern: '위탁운영', weight: 2}
+      - {pattern: '자산관리', weight: 2}
+      - {pattern: '통합관리', weight: 1}
+      - {pattern: 'FM', weight: 2, regex: '(?<![A-Za-z])FM(?![A-Za-z])'}
+      - {pattern: 'PM', weight: 1, regex: '(?<![A-Za-z0-9])PM(?![A-Za-z0-9.])'}
+    exclude: [FM라디오, 주파수, 방송국, 라디오방송, 미세먼지]
+
+  - id: IoT
+    search_terms: [IoT, 사물인터넷, 스마트센서, 스마트빌딩]
+    terms:
+      - {pattern: '사물인터넷', weight: 4}
+      - {pattern: 'IoT', weight: 4, regex: '(?<![A-Za-z])IoT(?![A-Za-z])', ignore_case: true}
+      - {pattern: '스마트빌딩', weight: 4}
+      - {pattern: '스마트건물', weight: 4}
+      - {pattern: '스마트센서', weight: 3}
+      - {pattern: 'NB-IoT', weight: 3}
+      - {pattern: '원격감시', weight: 3}
+      - {pattern: '무선센서', weight: 2}
+      - {pattern: 'LoRa', weight: 2, regex: '(?<![A-Za-z])LoRa(?![A-Za-z])', ignore_case: true}
+      - {pattern: '센서', weight: 1}
+    exclude: []
+
+  - id: BEMS
+    search_terms: [BEMS, 건물에너지, 에너지관리시스템, FEMS]
+    terms:
+      - {pattern: 'BEMS', weight: 5}
+      - {pattern: '건물에너지관리', weight: 5}
+      - {pattern: 'FEMS', weight: 4}
+      - {pattern: '건물에너지', weight: 4}
+      - {pattern: '에너지관리시스템', weight: 4}
+      - {pattern: '제로에너지', weight: 3}
+      - {pattern: 'ZEB', weight: 3, regex: '(?<![A-Za-z])ZEB(?![A-Za-z])'}
+      - {pattern: 'EMS', weight: 2, regex: '(?<![A-Za-z])EMS(?![A-Za-z])'}
+    exclude: [응급, 구급, 소방출동]
+
+  - id: 통합관제
+    search_terms: [통합관제, 관제센터, 관제시스템, 시설관리시스템]
+    terms:
+      - {pattern: '통합관제', weight: 5}
+      - {pattern: '스마트관제', weight: 4}
+      - {pattern: '관제센터', weight: 4}
+      - {pattern: '관제시스템', weight: 4}
+      - {pattern: '시설관제', weight: 4}
+      - {pattern: '시설관리시스템', weight: 4}
+      - {pattern: '설비자동제어', weight: 4}
+      - {pattern: '통합플랫폼', weight: 3}
+      - {pattern: 'BAS', weight: 3, regex: '(?<![A-Za-z])BAS(?![A-Za-z])'}
+      - {pattern: 'BMS', weight: 3, regex: '(?<![A-Za-z])BMS(?![A-Za-z])'}
+      - {pattern: 'FMS', weight: 3, regex: '(?<![A-Za-z])FMS(?![A-Za-z])'}
+      - {pattern: '모니터링시스템', weight: 2}
+      - {pattern: '정보통신', weight: 1}
+      - {pattern: '관제', weight: 1}
+    exclude: [항공관제, 해상관제, 교통관제센터]
+
+  - id: 에너지
+    search_terms: [에너지진단, 에너지절감, ESCO, 신재생, 태양광]
+    terms:
+      - {pattern: '에너지진단', weight: 5}
+      - {pattern: '에너지절감', weight: 4}
+      - {pattern: '에너지효율', weight: 4}
+      - {pattern: '에너지관리', weight: 4}
+      - {pattern: 'ESCO', weight: 4}
+      - {pattern: '신재생', weight: 3}
+      - {pattern: '태양광', weight: 3}
+      - {pattern: '수요관리', weight: 3}
+      - {pattern: '전력관리', weight: 3}
+      - {pattern: '열원', weight: 2}
+      - {pattern: '에너지', weight: 1}
+    exclude: [에너지바우처, 연료비지원]
+
+  - id: AI
+    search_terms: [인공지능, AI, 지능형]
+    terms:
+      - {pattern: '인공지능', weight: 4}
+      - {pattern: 'AI', weight: 3, regex: '(?<![A-Za-z])AI(?![A-Za-z])'}
+      - {pattern: '머신러닝', weight: 3}
+      - {pattern: '딥러닝', weight: 3}
+      - {pattern: '디지털트윈', weight: 3}
+      - {pattern: '지능형', weight: 2}
+    exclude: [조류인플루엔자, AI방역, 가금]
+
+# 의미 조합 규칙: all_of 의 모든 그룹에서 최소 1개씩 걸리면 해당 축에 가산
+combos:
+  - id: 설비유지관리
+    axis: FM용역
+    weight: 5
+    comment: "예) ○○연구원 전기·기계·소방·승강기 운영관리 위탁용역"
+    all_of:
+      - [기계설비, 전기설비, 소방설비, 승강기, 공조, 위생설비, 냉난방, 보일러, 수변전, 급배수, 기계, 전기, 소방]
+      - [유지관리, 유지보수, 운영관리, 관리용역, 위탁, 운영]
+
+  - id: 건물종합관리
+    axis: FM용역
+    weight: 4
+    comment: "예) ○○청사 종합관리 위탁용역"
+    all_of:
+      - [청사, 건물, 빌딩, 사옥, 연구원, 센터, 사업소, 캠퍼스, 병원]
+      - [종합관리, 운영관리, 관리용역, 위탁관리, 시설운영]
+
+  - id: 스마트시설
+    axis: 통합관제
+    weight: 4
+    comment: "예) ○○시 스마트 빌딩 통합 플랫폼 구축"
+    all_of:
+      - [스마트, 지능형, 디지털]
+      - [빌딩, 건물, 시설, 캠퍼스, 단지]
+      - [구축, 고도화, 플랫폼, 시스템, 관제]
