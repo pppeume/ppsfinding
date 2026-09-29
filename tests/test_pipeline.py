@@ -559,3 +559,16 @@ def test_a_flat_two_day_window_would_miss_friday():
     assert all(start.weekday() == 4 for start in uncovered), [
         s.strftime("%a %H:%M") for s in uncovered
     ]
+
+
+def test_window_span_matches_the_requested_days():
+    """실행 요약이 찍는 «N일» 이 실제 조회창 길이와 어긋나지 않아야 한다.
+
+    수집량이 평소보다 적을 때 창이 좁았는지 공고가 적었는지를 이 숫자로 가른다.
+    """
+    from g2b_watch.cli import _window
+
+    for days in (DEFAULT_LOOKBACK_DAYS, MONDAY_LOOKBACK_DAYS):
+        begin, end = _window(days)
+        span = (end - begin).total_seconds() / 86400
+        assert f"{span:.0f}" == str(days), (begin, end, days)

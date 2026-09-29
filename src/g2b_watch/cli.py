@@ -319,7 +319,13 @@ def cmd_collect(args: argparse.Namespace) -> int:
 
     if failed_sources:
         print(f"\n❌ 수집 실패 소스: {', '.join(failed_sources)} — 아래 숫자는 나머지 소스만의 결과입니다")
-    print(f"\n원시 {stats['fetched']}건 → 파싱 {stats['parsed']}건 → 키워드 매칭 {stats['matched']}건 → 적재대상 {len(ordered)}건")
+    # 조회창을 요약에도 다시 찍는다. 실행 첫머리에도 찍지만, 로그를 뒤에서부터
+    # 잘라 보는 경우(GitHub Actions 로그 조회는 반환량 상한이 있다) 거기까지
+    # 못 거슬러 올라간다. 수집량이 평소보다 적을 때 «창이 좁았나, 공고가 적었나»
+    # 를 가르는 게 이 한 줄이라, 끝에서도 읽히게 둔다.
+    span_days = (end - begin).total_seconds() / 86400
+    print(f"\n조회 기간: {begin:%m-%d %H:%M} ~ {end:%m-%d %H:%M} (KST, {span_days:.0f}일)")
+    print(f"원시 {stats['fetched']}건 → 파싱 {stats['parsed']}건 → 키워드 매칭 {stats['matched']}건 → 적재대상 {len(ordered)}건")
     print("  판정: " + " / ".join(f"{k} {v}건" for k, v in by_verdict.items()) if by_verdict else "  판정: 없음")
     print(f"  영업 우선검토({rules.review_threshold}점 이상): "
           f"{sum(1 for r in ordered if r.opportunity_score >= rules.review_threshold)}건")
