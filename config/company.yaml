@@ -1,0 +1,35 @@
+# 회사 프로필 — 참가자격 판정과 수주검토 점수의 기준값
+#
+# ⚠️ 아래 값은 아직 확정되지 않은 자리표시자입니다.
+#    구글 문서의 예시(대기업 / 경기도 본사 / 시설물유지관리·정보통신공사업·전기공사업)를
+#    그대로 옮겨 둔 것이므로, 실제 회사 정보로 반드시 교체해야 판정이 의미를 갖습니다.
+#    이 값이 틀리면 '참여불가' 판정이 통째로 틀립니다.
+
+company:
+  name: "(회사명 입력)"
+
+  # 기업규모: large_enterprise(대기업) | middle_standing(중견) | sme(중소) | small(소기업·소상공인)
+  scale: large_enterprise
+
+  # 소프트웨어사업자 신고 여부. 정보화사업 대기업 참여제한 판정에 쓰인다.
+  is_software_business: false
+
+  # 본사 소재지. 지역제한 공고 판정 기준.
+  headquarters_region: "경기도"
+
+  # 지사 소재지 목록. 공고가 지사투찰(brffcBidprcPermsnYn=Y)을 허용할 때만 인정된다.
+  branch_regions: []
+
+  # 보유 면허·업종명. 공고의 면허제한 목록과 문자열로 대조한다.
+  # 예: ["시설물유지관리업", "정보통신공사업", "전기공사업", "소방시설공사업"]
+  licenses: []
+
+  # 사업영역. keywords.yaml 의 축 id 와 같은 값을 쓴다.
+  business_areas: [FM용역, IoT, BEMS, 에너지, 통합관제, AI]
+
+budget:
+  # 이 금액 미만이면 사업규모 점수가 낮아진다 (원)
+  min_krw: 100000000
+  # 가장 적합한 사업규모 구간 (원)
+  sweet_spot_min_krw: 500000000
+  sweet_spot_max_krw: 5000000000
