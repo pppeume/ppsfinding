@@ -17,6 +17,7 @@ from g2b_watch.cli import (
 )
 from g2b_watch.config import DateParams, Source, Variant, load_keywords, load_sources
 from g2b_watch.g2b_client import G2BClient, G2BError, normalize_service_key
+from g2b_watch.enrich import Enrichment
 from g2b_watch.matcher import match
 from g2b_watch.normalize import KST, to_record
 
@@ -572,3 +573,106 @@ def test_window_span_matches_the_requested_days():
         begin, end = _window(days)
         span = (end - begin).total_seconds() / 86400
         assert f"{span:.0f}" == str(days), (begin, end, days)
+
+
+# --- 조회가 '일부' 실패한 수집도 조용히 넘어가지 않는다 -------------------------
+#
+# 2026-10-06 재실행이 60초 만에 끝나고 아티팩트가 3,916B(평일 정상 8~18KB)였는데
+# 초록으로 끝났다. 전부 실패면 종료코드 1 이 뜨므로 '일부 실패' 였던 것으로 보이는데,
+# 그때 코드는 WARNING 한 줄만 남겼다. 그 줄은 GitHub Actions 로그가 뒤에서부터
+# 잘려 읽히지 않는 경우가 많아, 사실상 아무 신호도 없는 셈이었다.
+
+
+def test_half_or_fewer_failures_stay_a_warning():
+    """키워드 한둘이 흔들리는 건 흔한 일이라 그 자체로 실패 처리하지 않는다."""
+    from g2b_watch.cli import INCOMPLETE_FETCH_RATIO
+
+    # 절반 '이하' 는 경고에 머문다 — 임계값은 초과(>) 비교여야 한다.
+    assert not (0.5 > INCOMPLETE_FETCH_RATIO)
+    assert 0.6 > INCOMPLETE_FETCH_RATIO
+
+
+def test_mostly_failed_fetch_counts_as_incomplete():
+    """절반 넘게 못 받았으면 '수집됐다' 고 볼 수 없다."""
+    from g2b_watch.cli import INCOMPLETE_FETCH_RATIO, SourceFetch
+
+    mostly_failed = SourceFetch(items=[{"bidNtceNo": "A1"}], attempted=25, failed=24)
+    assert mostly_failed.partly_failed, "전부 실패가 아니라 일부 실패로 잡혀야 한다"
+    assert not mostly_failed.all_failed
+    ratio = mostly_failed.failed / mostly_failed.attempted
+    assert ratio > INCOMPLETE_FETCH_RATIO, (
+        f"{mostly_failed.failed}/{mostly_failed.attempted} 는 불완전으로 봐야 한다"
+    )
+
+
+def test_a_couple_of_flaky_keywords_do_not_fail_the_run():
+    """25건 중 2건 실패처럼 흔한 흔들림은 초록을 유지해야 한다."""
+    from g2b_watch.cli import INCOMPLETE_FETCH_RATIO, SourceFetch
+
+    flaky = SourceFetch(items=[{"bidNtceNo": "A1"}], attempted=25, failed=2)
+    assert flaky.partly_failed
+    assert not (flaky.failed / flaky.attempted > INCOMPLETE_FETCH_RATIO)
+
+
+def test_mostly_failed_run_exits_nonzero(monkeypatch, capsys, tmp_path):
+    """절반 넘게 실패한 수집은 종료코드 1 로 끝나고 요약에도 찍혀야 한다.
+
+    경고 로그만으로는 부족하다 — GitHub Actions 로그는 뒤에서부터 잘려
+    그 줄까지 닿지 않는 경우가 많다. CI 색과 요약은 항상 읽힌다.
+    """
+    import g2b_watch.cli as cli
+
+    def fake_collect_raw(client, source, kw, begin, end, mode):
+        # 25건 중 24건 실패 — 한 건만 건졌다.
+        return cli.SourceFetch(
+            items=[{
+                "bidNtceNo": f"X{source.id}",
+                "bidNtceOrd": "000",
+                "bidNtceNm": "본관 BEMS 구축 용역",
+            }],
+            attempted=25,
+            failed=24,
+        )
+
+    monkeypatch.setattr(cli, "_collect_raw", fake_collect_raw)
+    monkeypatch.setattr(cli, "fetch_enrichment", lambda *a, **k: Enrichment())
+    monkeypatch.setenv("G2B_SERVICE_KEY", "KEY")
+
+    args = cli.build_parser().parse_args(
+        ["collect", "--no-notion", "--json-out", str(tmp_path / "r.json")]
+    )
+    code = args.func(args)
+
+    out = capsys.readouterr().out
+    assert code == 1, f"불완전한 수집인데 종료코드가 {code} 다"
+    assert "조회 일부 실패" in out, out
+    assert "48/50" in out, out  # 두 소스 × 24/25
+
+
+def test_flaky_run_still_exits_zero(monkeypatch, capsys, tmp_path):
+    """키워드 몇 건만 흔들린 실행은 초록을 유지해야 한다(과잉 경보 방지)."""
+    import g2b_watch.cli as cli
+
+    def fake_collect_raw(client, source, kw, begin, end, mode):
+        return cli.SourceFetch(
+            items=[{
+                "bidNtceNo": f"X{source.id}",
+                "bidNtceOrd": "000",
+                "bidNtceNm": "본관 BEMS 구축 용역",
+            }],
+            attempted=25,
+            failed=2,
+        )
+
+    monkeypatch.setattr(cli, "_collect_raw", fake_collect_raw)
+    monkeypatch.setattr(cli, "fetch_enrichment", lambda *a, **k: Enrichment())
+    monkeypatch.setenv("G2B_SERVICE_KEY", "KEY")
+
+    args = cli.build_parser().parse_args(
+        ["collect", "--no-notion", "--json-out", str(tmp_path / "r.json")]
+    )
+    code = args.func(args)
+
+    out = capsys.readouterr().out
+    assert code == 0, f"흔한 흔들림인데 종료코드가 {code} 다"
+    assert "⚠ 조회 일부 실패" in out, out

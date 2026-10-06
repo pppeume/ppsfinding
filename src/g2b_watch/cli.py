@@ -95,6 +95,12 @@ def _window(days: int) -> tuple[datetime, datetime]:
 #   금요일 실행 → [수 08:00, 금 08:00]
 #   월요일 실행 → [토 08:00, 월 08:00]   ← 금 08:00~토 08:00 이 비어 있다
 # 금요일 업무시간에 올라온 공고가 매주 통째로 빠지는 구멍이라, 월요일만 창을 넓혀 덮는다.
+# 조회가 '일부' 실패한 실행을 언제 실패로 볼지. 키워드 한둘이 흔들리는 건 흔한
+# 일이라 초록으로 두지만, 절반 넘게 못 받았다면 그날 수집은 사실상 빠진 것이다.
+# 그런 실행이 초록으로 끝나면 로그를 열어 보기 전까지 아무도 모른다 — 실제로
+# GitHub Actions 로그는 뒤에서부터 잘려 경고 줄까지 닿지 않는 경우가 많다.
+INCOMPLETE_FETCH_RATIO = 0.5
+
 DEFAULT_LOOKBACK_DAYS = 2
 # 3일이 아니라 4일인 이유: GitHub 스케줄은 40~110분씩 늦게 발화해 창의 양끝이 흔들린다.
 # 3일이면 경계가 금요일 실행의 시작점에 딱 붙어, 지연 조합에 따라 다시 틈이 생긴다.
@@ -237,6 +243,10 @@ def cmd_collect(args: argparse.Namespace) -> int:
     records: dict[str, Record] = {}
     stats = {"fetched": 0, "parsed": 0, "matched": 0}
     failed_sources: list[str] = []
+    # 부분 실패 집계. 요약에 찍고, 비중이 크면 종료코드에도 반영한다.
+    partial: list[str] = []
+    attempted_total = 0
+    failed_total = 0
 
     for source in sources_cfg.enabled_sources():
         try:
@@ -256,6 +266,8 @@ def cmd_collect(args: argparse.Namespace) -> int:
             )
             failed_sources.append(source.id)
             continue
+        attempted_total += fetched.attempted
+        failed_total += fetched.failed
         if fetched.partly_failed:
             log.warning(
                 "[%s] 조회 %s건 중 %s건 실패 — 결과가 일부 빠졌을 수 있습니다",
@@ -263,6 +275,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
                 fetched.attempted,
                 fetched.failed,
             )
+            partial.append(f"{source.id} {fetched.failed}/{fetched.attempted}")
 
         raw_items = fetched.items
         stats["fetched"] += len(raw_items)
@@ -317,8 +330,17 @@ def cmd_collect(args: argparse.Namespace) -> int:
     for rec in ordered:
         by_verdict[rec.verdict] = by_verdict.get(rec.verdict, 0) + 1
 
+    # 전체 조회 중 실패 비중. 절반을 넘으면 '수집됐다'고 보기 어렵다.
+    badly_incomplete = (
+        attempted_total > 0 and failed_total / attempted_total > INCOMPLETE_FETCH_RATIO
+    )
+
     if failed_sources:
         print(f"\n❌ 수집 실패 소스: {', '.join(failed_sources)} — 아래 숫자는 나머지 소스만의 결과입니다")
+    if partial:
+        mark = "❌" if badly_incomplete else "⚠"
+        print(f"\n{mark} 조회 일부 실패: {', '.join(partial)} "
+              f"(전체 {failed_total}/{attempted_total}) — 그만큼 공고가 빠졌습니다")
     # 조회창을 요약에도 다시 찍는다. 실행 첫머리에도 찍지만, 로그를 뒤에서부터
     # 잘라 보는 경우(GitHub Actions 로그 조회는 반환량 상한이 있다) 거기까지
     # 못 거슬러 올라간다. 수집량이 평소보다 적을 때 «창이 좁았나, 공고가 적었나»
@@ -351,7 +373,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
 
     if args.no_notion:
         log.info("--no-notion 지정 — Notion 적재를 건너뜁니다")
-        return 1 if failed_sources else 0
+        return 1 if (failed_sources or badly_incomplete) else 0
 
     sink = NotionSink(
         token=os.environ.get("NOTION_TOKEN", ""),
@@ -363,6 +385,13 @@ def cmd_collect(args: argparse.Namespace) -> int:
 
     if failed_sources:
         log.error("수집에 실패한 소스: %s", ", ".join(failed_sources))
+        return 1
+    if badly_incomplete:
+        log.error(
+            "조회 %s건 중 %s건 실패 — 절반 넘게 못 받았습니다. 그날 수집은 불완전합니다",
+            attempted_total,
+            failed_total,
+        )
         return 1
     return 0
 
