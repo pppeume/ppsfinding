@@ -1,0 +1,100 @@
+# 참가자격 판정(Bid Qualification) 규칙과 수주검토 점수(Opportunity Score) 배점
+#
+# 판정 원칙
+#   - 응답에 근거가 "있는" 것만 단정한다. 근거가 약하면 참여불가가 아니라 검토필요로 둔다.
+#   - 판정에 쓰는 필드는 모두 「조달청 OpenAPI 참고자료 v1.2」에서 확인된 실재 필드다.
+#   - 참여불가로 판정된 공고도 버리지 않고 적재한다(경쟁사·시장 동향 자료).
+
+# 제한 사유 코드
+restriction_codes:
+  R01: 지역제한
+  R02: 대기업 참여제한
+  R03: 중소기업자간 경쟁
+  R04: 소기업·소상공인 제한
+  R05: 면허 미보유
+  R06: 업종등록 제한
+  R07: 실적 제한
+  R08: 기업규모 제한
+  R09: 공동수급 조건
+  R10: 기타 참가자격 제한
+
+# 판정 결과 라벨 (Notion '참여여부' Select 옵션과 일치해야 한다)
+verdicts:
+  eligible: "참여가능"
+  review: "검토필요"
+  ineligible: "참여불가"
+
+rules:
+  # 지역제한 — 참가가능지역정보조회(getBidPblancListInfoPrtcptPsblRgn) 결과로 판정
+  region:
+    enabled: true
+    # 참가가능지역 목록이 아예 없으면 지역제한 없는 공고로 본다
+    treat_missing_as_open: true
+    # 지사투찰 허용(brffcBidprcPermsnYn=Y) 공고에서만 지사 소재지를 인정
+    honor_branch_only_when_permitted: true
+    verdict_on_mismatch: ineligible
+    code: R01
+
+  # 면허·업종 제한 — 면허제한정보조회(getBidPblancListInfoLicenseLimit) 결과로 판정
+  license:
+    enabled: true
+    # 공고에 indstrytyLmtYn=Y 인데 면허 목록을 받지 못하면 단정하지 않고 검토필요
+    verdict_on_unknown: review
+    verdict_on_mismatch: ineligible
+    code: R05
+    # 회사 면허 목록이 비어 있으면 판정 자체를 건너뛴다(설정 미완료 상태)
+    skip_when_company_licenses_empty: true
+
+  # 대기업 참여제한 — 응답에 직접 필드가 없다.
+  # 정보화사업여부(infoBizYn)만으로는 참여 가능/불가를 단정할 수 없어(예외 인정 규정 존재)
+  # 항상 '검토필요'로만 표시한다.
+  large_enterprise_sw:
+    enabled: true
+    verdict: review
+    code: R02
+
+  # 중소기업자간 경쟁 / 소기업·소상공인 제한 — 공고명·계약방법·낙찰방법 문자열에서 탐지
+  smallbiz_only:
+    enabled: true
+    verdict: ineligible          # 대기업·중견기업인 경우에만 적용
+    sme_markers: [중소기업자간, 중소기업간, 중소기업자 간]
+    small_markers: [소기업, 소상공인]
+    codes: {sme: R03, small: R04}
+
+  # 실적경쟁(arsltCmptYn=Y) — 실적 요건 충족 여부는 자동 판정 불가
+  performance:
+    enabled: true
+    verdict: review
+    code: R07
+
+  # 지명경쟁(dsgntCmptYn=Y) — 지명받지 않으면 참여 자체가 불가
+  designated:
+    enabled: true
+    verdict: ineligible
+    code: R10
+
+  # 입찰참가제한(bidPrtcptLmtYn=Y) — 제한 내용이 응답에 없어 확인 필요
+  participation_limited:
+    enabled: true
+    verdict: review
+    code: R10
+
+  # 지역의무공동도급(jntcontrctDutyRgnNm1~3) — 의무지역에 우리 지역이 없으면 검토필요
+  joint_contract_region:
+    enabled: true
+    verdict: review
+    code: R09
+
+# 수주검토 점수 (총 100점)
+scoring:
+  weights:
+    business_fit: 30      # 키워드 관련도 — 사업 적합성
+    area_match: 20        # 매칭 축이 회사 사업영역과 겹치는 정도
+    budget: 15            # 사업규모 적합성
+    region: 10            # 지역 적합성
+    tech_fit: 10          # 기술 축(IoT/BEMS/통합관제/AI) 해당 여부
+    qualification: 15     # 참가자격 판정 결과
+  # business_fit 만점을 주는 키워드 관련도 점수
+  business_fit_full_score: 15
+  # 이 점수 이상만 영업팀 우선 검토 대상으로 본다
+  review_threshold: 70
