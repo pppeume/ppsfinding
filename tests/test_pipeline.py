@@ -474,12 +474,13 @@ def test_successful_fetch_is_not_flagged_as_failed():
 
 WORKFLOW = Path(__file__).resolve().parents[1] / ".github/workflows/collect.yml"
 
-# GitHub 스케줄은 정시에 발화하지 않는다. 이 저장소에서 실측된 지연은 **31~350분**이다
-# (cron 23:00 UTC 기준, 가장 늦었던 날은 2026-11-17 의 04:50 UTC). 처음에는 110분까지만
-# 봤고 그 뒤 300분으로 올렸는데, 그보다도 늦게 발화하는 날이 또 나왔다. 그래서 실측
-# 최댓값에 여유를 둔 420분으로 둔다 — 창이 겹치는 데 필요한 여유는 하루(24시간)라
-# 이 정도 지연은 전부 흡수된다.
-MAX_SCHEDULE_DELAY = timedelta(minutes=420)
+# GitHub 스케줄은 정시에 발화하지 않는다. 이 저장소에서 실측된 지연은 **31~454분**이다
+# (cron 23:00 UTC 기준, 가장 늦었던 날은 2026-11-24 의 06:34 UTC). 110분 → 300분 → 420분
+# 으로 올려 왔는데 그때마다 더 늦게 발화하는 날이 나왔으므로, 이 값을 «상한»으로 믿지
+# 말아야 한다. **조회창이 겹치는 데 실제로 필요한 여유는 하루(1,440분)**이고, 그 아래
+# 지연은 창 설계상 전부 흡수된다. 아래 값은 그 여유 안에서 실측 최댓값에 넉넉한 마진을
+# 둔 회귀 검증용 수치일 뿐이다.
+MAX_SCHEDULE_DELAY = timedelta(minutes=600)
 
 
 def _cron_firings(weeks: int = 3) -> list[datetime]:
